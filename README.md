@@ -2,7 +2,7 @@
 
 简体中文 | [English](README.en.md)
 
-面向 x402 的独立 TRON Go 适配项目，目前提供网络/地址工具、`exact` Permit2 授权离线验签及只读链上预检。**尚未实现完整客户端、facilitator 或链上结算，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
+面向 x402 的独立 TRON Go 适配项目，目前提供网络/地址工具、`exact` Permit2 授权离线验签、只读链上预检及可选的持久化结算日志。**尚未实现完整客户端、facilitator 或链上结算，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
 
 ## 当前能力
 
@@ -73,16 +73,31 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 
 默认要求 HTTPS 并禁止重定向；API key 仅通过 `TRON-PRO-API-KEY` 头发送，节点 URL 不允许携带凭据、query 或 fragment。`HTTPClient` 可用于部署方可信 CA/代理配置，不会被原地修改；明文 HTTP 仅在显式启用 `AllowInsecureLocalHTTP` 后用于 loopback/localhost 测试节点。节点配置绝不能取自付款请求。
 
+## 持久化结算日志（可选 PostgreSQL）
+
+`exact/postgres.New` 接受调用方管理的 `pgxpool.Pool` 和可信 `exact.Config`。先在专用、可信的 `search_path` 下显式应用 [schema.sql](exact/postgres/schema.sql)（也可通过 `SchemaSQL` 获取），构造器不自动执行 DDL。未导入该包的工具/验签消费者不需要数据库；日志也不依赖支付网关或商户账本。
+
+- `Reserve` 先离线验签，再按网络、Permit2 合约、付款人和规范化 nonce 占用；相同授权返回原记录，不同签名摘要冲突。不同代理不能绕过同一个 Permit2 nonce 空间。
+- `SaveTransaction` 只能保存一份交易 ID 和签名字节。并发提交只有一份不同结果能够获胜；相同内容可重试，已保存的内容不可替换，同网络的一个 txid 不能绑定其他授权。
+- `BeginBroadcast` 先原子提交 `broadcast_unknown`，再返回唯一一次广播许可及持久化的原交易。只有该调用成功才能广播；不能广播尚未保存的本地结果。
+- 节点受理后调用 `RecordAccepted` 进入 `pending`，不是成功终态。超时、进程退出、查不到交易或数据库提交结果不明，都只能通过 `Get` 恢复并追踪原 txid，不得重签、替换或自动新建付款。广播之前崩溃也可能留下 unknown，当前没有自动重播或释放机制。
+
+这些约束只对共享同一数据库日志、遵循上述流程的实例生效。`Reserve` 不锁定链上 nonce/余额，交易字节是不透明数据：必须由可信构建器校验交易 ID、签名、授权绑定和有效期，本存储层不证明这些属性。实际交易构建、签名、广播、最终执行/到账核验仍未实现，**任何日志状态都不能作为付费资源交付凭据**；没有“恰好一次链上付款”的保证。
+
+签名数据可被广播，数据库须最小权限、加密与备份；`Transaction.Payload` 不参与 JSON 序列化，仍禁止自行打印。运行账号不应拥有 DELETE/TRUNCATE 权限，不自动清理过期占用；回滚代码也不能删除历史日志。CI 的 localhost 临时测试库使用 trust 认证，**不是部署配置**。
+
 ## 验证
 
 ```bash
 go mod verify
-go vet . ./exact
-go test -race -count=1 -cover . ./exact
-go build . ./exact
+go vet . ./exact ./exact/postgres
+go test -race -count=1 -cover . ./exact ./exact/postgres
+go build . ./exact ./exact/postgres
 ```
 
-测试覆盖地址、网络、TronWeb 摘要/签名对照、授权边界及模糊测试种子，以及本地模拟 JSON-RPC 节点下的预检和失败场景；没有真实链上测试。下一步是持久化幂等、结算和恢复，再由支付网关引用版本；本库不依赖商户账本。
+PostgreSQL 集成测试要求 `X402_TEST_DATABASE_URL` 指向专用测试库，并授予创建临时 schema 的权限。每个用例使用独立随机 schema，结束后仅清理自己的 schema；未设置时明确跳过数据库测试，不能当作集成验证通过。CI 配置临时 PostgreSQL 16 并实际执行这些测试。
+
+测试覆盖地址、网络、TronWeb 摘要/签名对照、授权边界及模糊测试种子、本地模拟 JSON-RPC 节点，以及真实 PostgreSQL 下的并发竞争和恢复。存储用例中的交易字节仅用于存储验证，不是可上链交易；没有真实链上测试。下一步是可信交易构建/签名、广播与固化结果核验、官方 SDK 机制接口和 Nile 闭环，再由支付网关引用版本。
 
 ## 参考与发布状态
 

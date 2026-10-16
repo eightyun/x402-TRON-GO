@@ -20,6 +20,21 @@ jobs:
     timeout-minutes: 10
     env:
       GOTOOLCHAIN: local
+      X402_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/x402_tron_ci?sslmode=disable
+    services:
+      postgres:
+        image: postgres:16.15-alpine
+        env:
+          POSTGRES_DB: x402_tron_ci
+          # 仅限本 job 的临时测试库，端口不暴露到外部网络；禁止照搬到部署配置。
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d x402_tron_ci"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,8 +54,8 @@ jobs:
       - name: Verify modules
         run: go mod verify
       - name: Vet implemented packages
-        run: go vet . ./exact
-      - name: Run offline tests with race detection
-        run: go test -race -count=1 -cover . ./exact
+        run: go vet . ./exact ./exact/postgres
+      - name: Run offline and PostgreSQL tests with race detection
+        run: go test -race -count=1 -cover . ./exact ./exact/postgres
       - name: Build implemented packages
-        run: go build . ./exact
+        run: go build . ./exact ./exact/postgres

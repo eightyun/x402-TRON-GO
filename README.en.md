@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-An independent Go project for TRON support in x402, providing network/address utilities, offline `exact` Permit2 authorization verification and read-only chain preflight. **No complete client, facilitator, or on-chain settlement is available. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
+An independent Go project for TRON support in x402, providing network/address utilities, offline `exact` Permit2 authorization verification, read-only chain preflight and an optional durable settlement journal. **No complete client, facilitator, or on-chain settlement is available. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
 
 ## Available utilities
 
@@ -40,20 +40,35 @@ TRON [eth_call](https://developers.tron.network/reference/eth_call) and [eth_get
 
 HTTPS is required by default; redirects are blocked. API keys use only the `TRON-PRO-API-KEY` header. URLs cannot contain credentials, query or fragment. An optional `HTTPClient` supports trusted CA/proxy settings without in-place mutation. Explicit `AllowInsecureLocalHTTP` permits only loopback/localhost development nodes. Never derive node configuration from payment requests.
 
+## Durable settlement journal (optional PostgreSQL)
+
+`exact/postgres.New` accepts a caller-managed `pgxpool.Pool` and trusted `exact.Config`. Explicitly apply [schema.sql](exact/postgres/schema.sql), also available as `SchemaSQL`, under a dedicated trusted `search_path`; construction never runs DDL. Other packages do not require a database. No dependency on the payment gateway or merchant ledger.
+
+- `Reserve` verifies authorization offline, then reserves network + Permit2 + payer + canonical nonce. Identical authorizations return the original record; different digests conflict. Different proxies share the same Permit2 nonce namespace.
+- `SaveTransaction` atomically persists a single transaction ID and signed payload. Only one distinct result wins concurrent writes; identical writes are idempotent. Saved data cannot be replaced or the same network/txid assigned to another authorization.
+- `BeginBroadcast` commits `broadcast_unknown` **before** returning the sole broadcast permission and persisted transaction. Never broadcast unsaved local data or proceed without this call succeeding.
+- `RecordAccepted` records node acceptance as `pending`, not success. Timeout, process exit, missing transaction or an ambiguous database commit requires `Get` and tracking the original txid, never re-signing, replacement or automatic new payment. A crash before actual submission may also leave unknown; automatic rebroadcast or reservation release is not implemented.
+
+These guarantees apply only to cooperating instances sharing the same journal. Reservation does not lock on-chain nonce or funds. Transaction bytes are opaque: a trusted builder must validate ID, signatures, authorization binding and expiry. The journal does not establish these properties. Actual transaction construction, signing, broadcasting and finalized execution/receipt validation remain unimplemented. **No journal state permits resource delivery; this is not an exactly-once on-chain payment guarantee.**
+
+Signed payloads can be broadcast: use least-privilege database access, encryption and backups. `Transaction.Payload` is excluded from JSON but must never be logged manually. Runtime accounts should lack DELETE/TRUNCATE privileges; do not automatically purge expired reservations or delete history when rolling back code. CI's temporary localhost database uses trust authentication and is **not a deployment configuration**.
+
 ## Development
 
 Requires Go 1.26+. CI uses 1.26.x. No release exists; public APIs may change.
 
 ```bash
 go mod verify
-go vet . ./exact
-go test -race -count=1 -cover . ./exact
-go build . ./exact
+go vet . ./exact ./exact/postgres
+go test -race -count=1 -cover . ./exact ./exact/postgres
+go build . ./exact ./exact/postgres
 ```
 
 Inputs are strict: no whitespace trimming, unknown networks, wildcards, or decimal leading zeros. Namespace must be `tron`; legacy hexadecimal references are case-insensitive. Addresses must be 34-character Base58Check or 42-character `41`-prefixed hex. Arbitrary `0x` addresses are not accepted as TRON input. Formatting is not authorization verification.
 
-Tests cover public vectors, independent encoding checks, authorization tampering, uint256/time boundaries, signature canonicality, fuzz seeds and preflight failures using local simulated JSON-RPC nodes. No live-chain acceptance is claimed. Next: durable idempotency, settlement and recovery before gateway integration.
+Database tests require `X402_TEST_DATABASE_URL` pointing to a dedicated PostgreSQL database with permission to create temporary schemas. Each test creates and cleans only its own random schema. Without this variable integration tests explicitly skip; this is not a passing database acceptance run. CI provisions PostgreSQL 16 and runs them.
+
+Tests cover public vectors, independent encoding checks, authorization tampering, uint256/time boundaries, signature canonicality, fuzz seeds, simulated-node preflight failures and actual PostgreSQL concurrency/recovery. Journal test payloads are storage fixtures, not valid on-chain transactions. No live-chain acceptance is claimed. Next: trusted transaction construction/signing, broadcast and finality checks, official SDK mechanism interfaces and Nile interoperability before gateway integration.
 
 ## References and status
 
