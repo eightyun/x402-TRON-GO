@@ -1,4 +1,4 @@
-// Package exact 提供 TRON exact Permit2 授权的离线校验，不证明链上可支付或已结算。
+// Package exact 提供 TRON exact Permit2 授权的离线校验与只读链上预检，不证明已结算。
 package exact
 
 import (

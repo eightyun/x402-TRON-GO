@@ -2,7 +2,7 @@
 
 简体中文 | [English](README.en.md)
 
-面向 x402 的独立 TRON Go 适配项目，目前提供网络/地址工具及 `exact` Permit2 授权的离线验签。**尚未实现完整客户端、facilitator 或链上结算，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
+面向 x402 的独立 TRON Go 适配项目，目前提供网络/地址工具、`exact` Permit2 授权离线验签及只读链上预检。**尚未实现完整客户端、facilitator 或链上结算，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
 
 ## 当前能力
 
@@ -10,7 +10,7 @@
 - 校验 Base58Check 或 `41` 前缀十六进制地址，支持两者转换。
 - 将有效 TRON 地址显式转换成 TIP-712 所需的 `0x` + 20 字节地址。
 - 根包仅使用 Go 标准库；`exact` 包复用官方 SDK v2.28.0 的协议类型，使用成熟的 secp256k1/Keccak 库校验授权。
-- 不访问 RPC、不持有密钥、不自动批准代币授权或广播交易。
+- 离线校验不访问 RPC；可选的 `PreflightVerifier` 仅执行只读 JSON-RPC。两者均不持有密钥、不批准代币授权、不消费 nonce 或广播交易。
 
 网络标识支持不等于该网络的支付机制已实现。TRON 主网和测试网使用相同地址格式，**不能根据地址判断网络**。地址格式有效不代表已激活、筛查通过或拥有资金。
 
@@ -54,6 +54,25 @@ if err != nil {
 
 `exact/testdata/tronweb-permit2.json` 是 TronWeb 6.3.0 独立生成并验签的公开向量。使用临时随机测试密钥，密钥未保存；这只验证摘要/签名兼容，不是完整客户端或真实链上验收。
 
+## 只读链上预检
+
+`exact.NewPreflightVerifier` 接受 `PreflightConfig`，其 `Authorization` 沿用离线校验的可信合约配置。必须另行提供可信 `NodeURL`、`Permit2CodeHash` 和 `ProxyCodeHash`；两项哈希为 runtime bytecode 的 Keccak-256（`0x` + 32 字节），必须从独立核验的部署资料获得，不能自动信任节点第一次返回的代码。资产地址仍由服务端可信报价决定。
+
+`Check(ctx, payload, requirements, now)` 会：
+
+1. 先完成离线授权校验，再查询节点链 ID 和最新链头。
+2. 核对 Permit2/代理代码哈希、代理 `PERMIT2()` 与二字段 `WITNESS_TYPEHASH()`、Permit2 `DOMAIN_SEPARATOR()`；要求代币地址存在代码。
+3. 查询余额、对 Permit2 的 allowance，以及 `nonceBitmap(payer, nonce >> 8)` 中对应的 nonce 位。
+4. 再次核对链 ID/链头，并把 RPC 用时计入最后的授权有效期检查。
+
+余额或 allowance 不足、nonce 已使用、代码/绑定不符、头变化或任何读取失败都会拒绝。成功返回的 `PreflightResult` 只有授权与观测头，**不是结算证明，也不会锁定余额或 nonce**。不提供恶意节点的状态证明；配置节点和合约代码哈希仍是信任边界。
+
+当前一轮正常预检执行 13 次串行读取。总预算默认 15 秒、上限 1 分钟，不自动重试；最新链头最多落后服务端 60 秒或超前 5 秒。较慢节点上可能因链头更新而被保守拒绝，调用方可在自身预算内重新预检，但不能据此自动发起新交易。
+
+TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth_getCode](https://developers.tron.network/reference/eth_getcode) 当前读取 latest 状态，不能通过传入区块号获得历史状态。前后链头一致只是漂移检查，**不是原子快照或最终性保证**。结算前仍须复查，最终以实际链上执行结果为准。
+
+默认要求 HTTPS 并禁止重定向；API key 仅通过 `TRON-PRO-API-KEY` 头发送，节点 URL 不允许携带凭据、query 或 fragment。`HTTPClient` 可用于部署方可信 CA/代理配置，不会被原地修改；明文 HTTP 仅在显式启用 `AllowInsecureLocalHTTP` 后用于 loopback/localhost 测试节点。节点配置绝不能取自付款请求。
+
 ## 验证
 
 ```bash
@@ -63,7 +82,7 @@ go test -race -count=1 -cover . ./exact
 go build . ./exact
 ```
 
-测试覆盖地址、网络、TronWeb 摘要/签名对照、字段篡改、uint256 边界、有效期和非规范签名，以及模糊测试种子；没有真实链上测试。下一步是链上状态检查与结算，再由支付网关引用版本；本库不依赖商户账本。
+测试覆盖地址、网络、TronWeb 摘要/签名对照、授权边界及模糊测试种子，以及本地模拟 JSON-RPC 节点下的预检和失败场景；没有真实链上测试。下一步是持久化幂等、结算和恢复，再由支付网关引用版本；本库不依赖商户账本。
 
 ## 参考与发布状态
 

@@ -347,25 +347,11 @@ func TestVerifierConcurrentUse(t *testing.T) {
 func TestGeneratedEOASignatureAndValidityBoundary(t *testing.T) {
 	t.Parallel()
 	input := loadVector(t)
-	key, err := secp256k1.GeneratePrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer key.Zero()
-	hasher := sha3.NewLegacyKeccak256()
-	_, _ = hasher.Write(key.PubKey().SerializeUncompressed()[1:])
-	input.Authorization.From = "0x" + hex.EncodeToString(hasher.Sum(nil)[12:])
 	input.Authorization.Witness.ValidAfter = "2000000000"
 	input.Authorization.Deadline = "2000000006"
 	input.Authorization.Nonce = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)).String()
+	input = resignVector(t, input)
 	verifier := verifierFor(t, input.Config)
-	digest, err := verifier.Digest(input.Authorization)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compact := ecdsa.SignCompact(key, digest[:], false)
-	signature := append(append([]byte(nil), compact[1:]...), compact[0])
-	input.Signature = "0x" + hex.EncodeToString(signature)
 	if _, err := verifier.VerifyAuthorization(envelope(t, input), input.Requirements, time.Unix(input.Now, 0)); err != nil {
 		t.Fatalf("随机 EOA 签名/有效期边界/uint256 上限未通过：%v", err)
 	}
@@ -374,6 +360,28 @@ func TestGeneratedEOASignatureAndValidityBoundary(t *testing.T) {
 	if _, err := verifierFor(t, input.Config).VerifyAuthorization(envelope(t, input), input.Requirements, time.Unix(input.Now, 0)); err != nil {
 		t.Fatalf("历史网络别名影响签名域：%v", err)
 	}
+}
+
+// resignVector 为边界测试生成临时随机签名，不保存或输出测试密钥。
+func resignVector(t testing.TB, input vector) vector {
+	t.Helper()
+	key, err := secp256k1.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer key.Zero()
+	hasher := sha3.NewLegacyKeccak256()
+	_, _ = hasher.Write(key.PubKey().SerializeUncompressed()[1:])
+	input.Authorization.From = "0x" + hex.EncodeToString(hasher.Sum(nil)[12:])
+	verifier := verifierFor(t, input.Config)
+	digest, err := verifier.Digest(input.Authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact := ecdsa.SignCompact(key, digest[:], false)
+	signature := append(append([]byte(nil), compact[1:]...), compact[0])
+	input.Signature = "0x" + hex.EncodeToString(signature)
+	return input
 }
 
 func FuzzVerifyAuthorization(f *testing.F) {

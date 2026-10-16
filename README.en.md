@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-An independent Go project for TRON support in x402, providing network/address utilities and offline `exact` Permit2 authorization verification. **No complete client, facilitator, or on-chain settlement is available. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
+An independent Go project for TRON support in x402, providing network/address utilities, offline `exact` Permit2 authorization verification and read-only chain preflight. **No complete client, facilitator, or on-chain settlement is available. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
 
 ## Available utilities
 
@@ -10,7 +10,7 @@ An independent Go project for TRON support in x402, providing network/address ut
 - `NormalizeAddressHex` and `NormalizeAddressBase58`: validate and convert TRON addresses.
 - `AddressForSigning`: explicitly convert a valid TRON address to a 20-byte `0x` address for TIP-712.
 
-The root package uses only the standard library. The `exact` package uses official x402 Go SDK v2.28.0 types and established secp256k1/Keccak libraries. No RPC calls, key storage, token approvals, or transactions. Recognizing a network does not mean settlement is supported. Address format cannot distinguish TRON networks or establish account activation, safety, or balance.
+The root package uses only the standard library. The `exact` package uses official x402 Go SDK v2.28.0 types and established secp256k1/Keccak libraries. Offline verification makes no RPC calls; optional preflight performs read-only JSON-RPC. Neither stores keys, approves tokens, consumes nonces or broadcasts transactions. Recognizing a network does not mean settlement is supported. Address format cannot distinguish TRON networks or establish account activation, safety, or balance.
 
 ## Offline exact Permit2 verification
 
@@ -26,6 +26,20 @@ The authorization does not bind a specific HTTP URL or request body. Resource se
 
 The public TronWeb 6.3.0 vector verifies digest/signature compatibility offline. Its ephemeral random test key was discarded; no live wallet or blockchain was used. This is not full client/facilitator interoperability acceptance.
 
+## Read-only chain preflight
+
+`exact.NewPreflightVerifier` accepts `PreflightConfig` with trusted `Authorization` settings, `NodeURL`, `Permit2CodeHash` and `ProxyCodeHash`. Hashes must be independently verified runtime-bytecode Keccak-256 values (`0x` + 32 bytes), not learned from the node on first use. Token addresses come from trusted server-side requirements.
+
+`Check(ctx, payload, requirements, now)` verifies authorization, chain ID and a fresh latest head; pins Permit2/proxy code; checks proxy `PERMIT2()`/`WITNESS_TYPEHASH()` and Permit2 `DOMAIN_SEPARATOR()`; requires token code; reads balance, Permit2 allowance and the `nonceBitmap(payer, nonce >> 8)` bit; then rechecks chain/head and authorization validity including elapsed RPC time.
+
+Read failures, insufficient funds/allowance, used nonce or mismatched contracts/network/heads fail closed. A successful `PreflightResult` is **not a settlement proof or a reservation of balance/nonce**. The configured RPC and independently verified code hashes remain trust boundaries; no malicious-node state proofs are provided.
+
+A normal round uses 13 sequential reads. Total timeout defaults to 15 seconds, at most one minute; no automatic retries. Heads may be at most 60 seconds old or five seconds ahead of server time. Slow nodes may conservatively fail due to head changes; callers can retry preflight within their budget, never infer permission to start another transaction.
+
+TRON [eth_call](https://developers.tron.network/reference/eth_call) and [eth_getCode](https://developers.tron.network/reference/eth_getcode) read latest state, not historical state selected by block references. Matching before/after heads is a drift check, **not an atomic snapshot or finality guarantee**. Revalidate before settlement and verify actual execution outcomes.
+
+HTTPS is required by default; redirects are blocked. API keys use only the `TRON-PRO-API-KEY` header. URLs cannot contain credentials, query or fragment. An optional `HTTPClient` supports trusted CA/proxy settings without in-place mutation. Explicit `AllowInsecureLocalHTTP` permits only loopback/localhost development nodes. Never derive node configuration from payment requests.
+
 ## Development
 
 Requires Go 1.26+. CI uses 1.26.x. No release exists; public APIs may change.
@@ -39,7 +53,7 @@ go build . ./exact
 
 Inputs are strict: no whitespace trimming, unknown networks, wildcards, or decimal leading zeros. Namespace must be `tron`; legacy hexadecimal references are case-insensitive. Addresses must be 34-character Base58Check or 42-character `41`-prefixed hex. Arbitrary `0x` addresses are not accepted as TRON input. Formatting is not authorization verification.
 
-Tests cover public vectors, independent encoding checks, authorization tampering, uint256/time boundaries, signature canonicality and fuzz seeds. No live-chain acceptance is claimed. Next: chain-state checks and settlement before gateway integration.
+Tests cover public vectors, independent encoding checks, authorization tampering, uint256/time boundaries, signature canonicality, fuzz seeds and preflight failures using local simulated JSON-RPC nodes. No live-chain acceptance is claimed. Next: durable idempotency, settlement and recovery before gateway integration.
 
 ## References and status
 
