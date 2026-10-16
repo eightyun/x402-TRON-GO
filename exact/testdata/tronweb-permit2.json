@@ -1,0 +1,31 @@
+{
+  "generator": "tronweb@6.3.0 (offline; ephemeral random key discarded)",
+  "now": 2000000000,
+  "config": {
+    "network": "tron:3448148188",
+    "permit2Address": "TYQuuhGbEMxF7nZxUHV3uHJxAVVAegNU9h",
+    "proxyAddress": "TFGoaq2KjizijgjtkVxT7yjffW1A5T1j6F"
+  },
+  "requirements": {
+    "scheme": "exact",
+    "network": "tron:3448148188",
+    "asset": "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+    "amount": "1000",
+    "payTo": "TNPeeaaFB7K9cmo4uQpcU32zGK8G1NYqeL",
+    "maxTimeoutSeconds": 600,
+    "extra": { "assetTransferMethod": "permit2" }
+  },
+  "authorization": {
+    "from": "0x65408ecf4f5b09dbd545922f5fb6e0f38276bf21",
+    "permitted": {
+      "token": "0xeca9bc828a3005b9a3b909f2cc5c2a54794de05f",
+      "amount": "1000"
+    },
+    "spender": "0x3a2c916ce2b40f0ffc06cc80c0f72c0fc25be105",
+    "nonce": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "deadline": "2000000600",
+    "witness": { "to": "0x8840e6c55b9ada326d211d818c34a994aeced808", "validAfter": "0" }
+  },
+  "signature": "0x9359f034d9533efc499e1acda9b76496649c4eb3597c9725cbd19362f8e6e652516325faa35142b09d251ba20c53809e6ebac18592bbcb7030b5e1bd061ea6f11b",
+  "digest": "0xe1ecce9e1a89b5d343cfcad3fc1232f001ea055f1865aa2f3f145dc4ccf49e31"
+}

@@ -1,0 +1,13 @@
+/.idea/
+/.vscode/
+/.env
+/.env.*
+!/.env.example
+/docs/
+/bin/
+/build/
+/coverage/
+*.log
+*.test
+*.key
+*.pem
