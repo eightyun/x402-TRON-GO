@@ -240,6 +240,18 @@ func (prepared *PreparedSettlement) ValidateSigned(transaction SettlementTransac
 	return nil
 }
 
+// ValidateBroadcast 校验已准备交易及当前剩余有效期，不提供广播许可或链上预检。
+// 持久化串联与底层客户端共同使用；now 必须来自服务端可信时钟。
+func (prepared *PreparedSettlement) ValidateBroadcast(transaction SettlementTransaction, now time.Time) error {
+	if err := prepared.ValidateSigned(transaction); err != nil {
+		return err
+	}
+	if !prepared.signingTimeValid(now) {
+		return ErrSettlementValidity
+	}
+	return nil
+}
+
 func validSettlementTime(value time.Time) bool {
 	year := value.UTC().Year()
 	return year >= 2018 && year <= 9999

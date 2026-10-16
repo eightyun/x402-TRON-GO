@@ -1,4 +1,4 @@
-// Package postgres 提供可选的结算幂等日志，不签名、广播或证明付款成功。
+// Package postgres 提供可选结算幂等日志及受控提交，不持有密钥或证明付款成功。
 package postgres
 
 import (

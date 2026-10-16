@@ -2,7 +2,7 @@
 
 简体中文 | [English](README.en.md)
 
-面向 x402 的独立 TRON Go 适配项目，目前提供网络/地址工具、`exact` Permit2 授权离线验签、只读预检、受限结算交易构建/外部签名校验，以及可选的持久化日志。**尚未实现完整客户端、facilitator 或实际广播/链上结算，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
+面向 x402 的独立 TRON Go 适配项目，目前提供网络/地址工具、`exact` Permit2 授权校验、只读预检、受限交易构建/签名校验、单次广播与原交易查询，以及可选的持久化日志。**尚未实现完整客户端、facilitator 或链上成功结算核验，也未完成真实测试网闭环，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
 
 ## 当前能力
 
@@ -83,7 +83,16 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 
 `SettlementTransaction.Payload` 是**完整二进制 Transaction Protobuf，不是 JSON**，适用于后续 [broadcasthex](https://developers.tron.network/reference/broadcasthex) 的十六进制请求。`ValidateSigned` 只接受对应准备对象的规范编码，核对所有 raw 字节、ID 与签名，拒绝未知/重复字段、附带 TRX/TRC10、额外合约/签名或替换费用策略；不是通用 TRON 交易导入器，也不检查当前有效期或证明到账。
 
-目前只支持默认 owner 权限的单 EOA 费用付款方，不支持多签、自定义权限或合约钱包。仍须核验链上账户权限、费用资源和执行结果；本轮不提供密钥加载器、RPC 广播或成功终态。签名成功后必须通过持久化日志保存唯一交易，再取得广播许可；重试不能延长原交易生命周期或另行构建付款。独立公开向量 [tronweb-settlement.json](exact/testdata/tronweb-settlement.json) 使用合成区块和已丢弃的随机测试密钥，仅验证编码/签名互操作，不是测试网上链验收。
+目前只支持默认 owner 权限的单 EOA 费用付款方，不支持多签、自定义权限或合约钱包。仍须核验链上账户权限、费用资源和执行结果；不提供密钥加载器或成功终态。签名成功后必须通过持久化日志保存唯一交易，再取得广播许可；重试不能延长原交易生命周期或另行构建付款。独立公开向量 [tronweb-settlement.json](exact/testdata/tronweb-settlement.json) 使用合成区块和已丢弃的随机测试密钥，仅验证编码/签名互操作，不是测试网上链验收。
+
+## 单次广播与原交易查询
+
+`exact.NewExecutionClient` 接受可信 `ExecutionConfig`：固定 `Network`、原生 FullNode 根 `NodeURL` 和独立核验的 `GenesisBlockID`（无 `0x` 的 64 位 hex，前 8 字节为零，末 4 字节匹配 TRON chain ID）。不能从付款请求选节点或自动学习创世 ID；测试中的合成 ID 不可作为部署配置。默认 HTTPS，仅显式启用的 loopback 节点允许明文；URL 不接受 path/query/fragment/userinfo。超时默认 15 秒、最多 1 分钟；响应最多 1 MiB，不跟随重定向，不回显 URL、API key 或原始节点消息。自定义 HTTP Transport 属于可信配置，不得自行重试写请求。
+
+- `Broadcast(ctx, prepared, transaction, now)` 是低层单次写接口：必须先持久化并取得日志许可。它校验完整字节/签名/网络/剩余有效期，向**同一个原生节点**查询区块 0 并比较完整创世 ID，再发一次 `/wallet/broadcasthex`，最后复核网络。只有明确 `result=true`、成功 code（或兼容缺省）及原 txid 一致才表示本次受理；不是成功结算。网络读取用时计入广播前有效期检查。
+- `Lookup(ctx, txid)` 前后核对同节点创世 ID，查询 `/wallet/gettransactionbyid`，核对返回 txID 并重算 `SHA-256(raw_data_hex)`。返回 `TransactionObservation.Found`，**不代表成功执行、固化或收款到账**。只有空对象表示本次未找到；超时、歧义/重复顶层 JSON 字段、错误 hash 或网络不符都返回错误。未找到或请求被拒绝均不能据此释放占用、重签或另建付款。
+
+实际请求只有模拟节点测试覆盖，尚未运行真实 Nile 广播。节点受理、FullNode 主体、执行回执、固化回执及真实到账是不同证据层次；本轮没有后面三项的成功判定，也不提供恶意节点的状态证明。
 
 ## 持久化结算日志（可选 PostgreSQL）
 
@@ -93,8 +102,10 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 - `SaveTransaction` 只能保存一份交易 ID 和签名字节。并发提交只有一份不同结果能够获胜；相同内容可重试，已保存的内容不可替换，同网络的一个 txid 不能绑定其他授权。
 - `BeginBroadcast` 先原子提交 `broadcast_unknown`，再返回唯一一次广播许可及持久化的原交易。只有该调用成功才能广播；不能广播尚未保存的本地结果。
 - 节点受理后调用 `RecordAccepted` 进入 `pending`，不是成功终态。超时、进程退出、查不到交易或数据库提交结果不明，都只能通过 `Get` 恢复并追踪原 txid，不得重签、替换或自动新建付款。广播之前崩溃也可能留下 unknown，当前没有自动重播或释放机制。
+- 推荐通过 `Submit(ctx, id, prepared, executionClient, now)` 串联提交：从数据库读原字节、校验、CAS 标记 unknown、广播原快照、记录受理。并发/重复提交只有一次写许可，已 unknown/pending 不再发送。节点已受理但 ACK 落库失败仍保留 unknown/原 txid，不回退到可发送状态。SQL 提交本身不确定时，必须重新 `Get`，不能假定未广播。
+- `Track(ctx, id, executionClient)` 重启后只用日志中的原 txid 查询，不需重建过期授权/Prepare；完全只读，不因 Found 而修改为成功或因未找到而重播。调用方应对整轮数据库和网络操作设置有界 context；本库不启动后台执行器、轮询或队列。
 
-这些约束只对共享同一数据库日志、遵循上述流程的实例生效。`Reserve` 不锁定链上 nonce/余额，存储层仍将交易字节视为不透明数据：应使用上面的可信构建器完成 ID/签名/授权绑定/有效期校验，再按 ID/Payload 保存，不能直接接收付款请求提供的任意交易。实际广播、最终执行/到账核验仍未实现，**任何日志状态都不能作为付费资源交付凭据**；没有“恰好一次链上付款”的保证。
+这些约束只对共享同一数据库日志、遵循上述流程的实例生效。`Reserve` 不锁定链上 nonce/余额，存储层仍将交易字节视为不透明数据：应使用上面的可信构建器完成 ID/签名/授权绑定/有效期校验，再按 ID/Payload 保存，不能直接接收付款请求提供的任意交易。调用者仍须完成合约预检、账户权限、费用资源和风控闸门；最终执行/固化与到账核验尚未实现，**任何日志状态都不能作为付费资源交付凭据**；没有“恰好一次链上付款”的保证。
 
 签名数据可被广播，数据库须最小权限、加密与备份；`Transaction.Payload` 不参与 JSON 序列化，仍禁止自行打印。运行账号不应拥有 DELETE/TRUNCATE 权限，不自动清理过期占用；回滚代码也不能删除历史日志。CI 的 localhost 临时测试库使用 trust 认证，**不是部署配置**。
 
@@ -109,7 +120,7 @@ go build . ./exact ./exact/postgres
 
 PostgreSQL 集成测试要求 `X402_TEST_DATABASE_URL` 指向专用测试库，并授予创建临时 schema 的权限。每个用例使用独立随机 schema，结束后仅清理自己的 schema；未设置时明确跳过数据库测试，不能当作集成验证通过。CI 配置临时 PostgreSQL 16 并实际执行这些测试。
 
-测试覆盖地址、网络、TronWeb 授权/交易编码与签名对照、授权/费用/有效期边界及模糊测试、本地模拟 JSON-RPC 节点，以及真实 PostgreSQL 下的并发竞争和恢复。存储用例中的交易字节仅用于存储验证，不是可上链交易；没有真实链上测试。下一步是广播与固化结果核验、官方 SDK 机制接口和 Nile 闭环，再由支付网关引用版本。
+测试覆盖地址、网络、TronWeb 编码/签名对照、授权/费用/时间边界、模糊测试、模拟 JSON-RPC/原生节点，以及真实 PostgreSQL 下的并发与恢复。包括写前已提交 unknown、节点收到后 ACK 丢失、受理后 SQL 失败、只读恢复且不重播。早期存储用例使用不透明夹具，串联用例使用公开 Protobuf 向量；没有真实链上测试。下一步是固化回执、执行及到账核验、官方 SDK 机制接口和 Nile 闭环，再由支付网关引用版本。
 
 ## 参考与发布状态
 
