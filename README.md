@@ -2,14 +2,14 @@
 
 简体中文 | [English](README.en.md)
 
-面向 x402 的独立 TRON Go 适配 SDK，目标是让客户端/Agent、API 服务端和 facilitator 直接使用 TRON 支付，不必自行实现链适配，也不依赖我们的支付网关。当前已有官方客户端机制接口与本地 HTTP 握手示例，以及授权校验、只读预检、受限交易构建、单次广播/查询和可选持久化日志。**资源服务端机制、完整 facilitator、链上成功结算核验和真实测试网闭环仍未完成，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
+面向 x402 的独立 TRON Go 适配 SDK，目标是让客户端/Agent、API 服务端和 facilitator 直接使用 TRON 支付，不必自行实现链适配，也不依赖我们的支付网关。当前已有官方客户端/资源服务端机制、HTTP 接入示例，以及授权校验、只读预检、受限交易构建、单次广播/查询和可选持久化日志。**完整 facilitator、链上成功结算核验和真实测试网闭环仍未完成，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
 
 ## 开箱即用进度
 
 | 角色 | 当前状态 |
 | --- | --- |
 | 客户端 / Agent | 已实现官方 `SchemeNetworkClient`；配置付款策略和签名器，由官方 HTTP 客户端处理 402 与签名重试 |
-| API 资源服务端 | 待实现官方机制接口与完整受保护接口示例，不能仅验签就发货 |
+| API 资源服务端 | 已实现官方 `SchemeNetworkServer`、Permit2 报价与 `upfront` 中间件示例；仍需可信 facilitator，不能仅验签就发货 |
 | 自建 facilitator | 已有底层构建/广播/持久化；待固化执行、到账核验及官方机制接口串联 |
 
 普通客户端不需要 PostgreSQL，不加载支付网关的商户/账本模块。数据库只是自建 facilitator 可选的持久化实现。网络、资产与收款策略、钱包签名、Gas 和必要的 Permit2 代币授权仍是接入前置条件；不自动授权或隐式上链。
@@ -63,6 +63,31 @@ func paymentHTTPClient(contracts exact.Config, signer *exact.EOASigner, asset, p
 
 **单次上限不是累计预算。** 每次创建载荷都会产生新的可扣款授权，不能对未知结果自动重新付款；现有授权也不绑定 URL/请求内容。应用仍须限制目标站点/预算，避免不可信重定向或额外恢复 hooks 重复授权。HTTP 2xx 或本地验签结果均不是链上到账证明。
 
+## API 资源服务端接入
+
+`exact.NewServer(exact.ServerConfig{Network: network, Asset: asset, PayTo: payTo})` 可直接注册到官方资源服务端。固定单网络/资产/收款人，不需要数据库或钱包私钥。`ParsePrice` 接受规范最小单位正整数字符串（如 `"1000"`）、官方 `x402.AssetAmount` 或相应严格 map；**不接受 `$0.01`、浮点数或隐式汇率换算**。
+
+机制只启用官方 `upfront`：报价自动包含 `assetTransferMethod: permit2` 和 `paymentFlow: upfront`，facilitator 结算明确成功后才运行 API handler。`pending`、`unknown`、拒绝、错误或超时都不能返回结算成功。upfront 不先调用独立的 `/verify`，所以 **`/settle` 必须自行完整验签、预检、持久化并核验固化执行与实际到账**；不能只广播就返回 `success=true`。
+
+启动时要求可信 facilitator 的 `/supported` 包含匹配的 `x402Version: 2`、`scheme: exact`、规范网络，以及 `extra.supportedAssetTransferMethods` 数组中的 `permit2`。这个能力字段沿用已有 TRON 生态实现，不会被复制到支付报价；声明本身不是可信合约或付款证明。合约部署配置仍需在客户端和 facilitator 独立核对。
+
+可运行的 [服务端示例](examples/server/main.go) 使用官方 net/http 中间件。先设置以下环境变量，再运行 `go run ./examples/server`：
+
+| 变量 | 含义 |
+| --- | --- |
+| `X402_NETWORK` | 默认 Nile：`tron:3448148188` |
+| `X402_ASSET` | 必填，可信代币地址 |
+| `X402_PAY_TO` | 必填，商户收款地址 |
+| `X402_PRICE_ATOMIC` | 必填，单次价格最小单位正整数 |
+| `X402_FACILITATOR_URL` | 必填，可信 HTTPS facilitator 基础 URL，无 userinfo/query/fragment |
+| `X402_LISTEN_ADDR` | 默认 `127.0.0.1:8080` |
+
+示例启动前显式 `Initialize` 并构建报价，配置/能力校验失败就退出，不忽略错误继续监听。提供 `GET /resource`，未付款返回 402；HEAD 被拒绝，不能利用 Go GET 路由的 HEAD 匹配绕过。配置了有界启动/结算/HTTP 超时、禁上游重定向、请求头上限和优雅关闭。对外部署应加 TLS 入口及适当鉴权；第三方 facilitator 认证应使用官方 `AuthProvider`，不要把 token 拼进 URL。
+
+**当前没有本项目可用于真实付款的完整 facilitator**，运行示例需要另行配置经过验证的服务，不默认使用公共地址，也未启动过真实远端服务进行验收。自动测试中的成功 facilitator 仅存在于测试代码，用于证明“模拟成功才运行 handler”，不是链上证明。
+
+先结算意味着业务 handler 随后失败时不会自动退款，也不应再次结算；应用需设计履约幂等、查询和补偿。新服务端的 upfront 报价需要本次新版客户端；原有不带 paymentFlow 的报价和签名仍兼容。授权摘要不绑定 paymentFlow，校验器与官方服务端会核对可信报价和 accepted 一致，不能通过剥离该字段降级流程。
+
 ## 当前能力
 
 - 识别 Mainnet、Nile、Shasta 网络，兼容已知历史十六进制别名，统一输出十进制 CAIP-2 标识。
@@ -103,7 +128,7 @@ if err != nil {
 
 - `Digest` 计算二字段 `Witness(to, validAfter)` 的 TIP-712 摘要，供外部签名器使用。
 - `VerifyAuthorization` 接受官方 SDK 的 `types.PaymentPayload`、服务端可信 `types.PaymentRequirements` 和服务端当前时间；绑定报价、网络、资产、金额、收款人、代理、nonce 和有效期，并恢复 EOA 公钥核对付款人。
-- 当前要求 `extra` 仅包含 `assetTransferMethod: "permit2"`，拒绝其他 `extra` 与非空 `extensions`。这是一套明确限定的互操作子集，不是所有 x402/TRON 扩展的完整支持。
+- `extra` 必须包含 `assetTransferMethod: "permit2"`，可增加唯一的 `paymentFlow: "upfront"`；拒绝其他字段、流程与非空 `extensions`，并核对两侧 paymentFlow 一致。这是一套限定的互操作子集，不是所有 x402/TRON 扩展的完整支持。
 - 配置及报价地址使用 TRON 格式，授权中的地址使用严格的 20 字节 `0x` 格式。金额/时间使用规范十进制 uint256；nonce 也支持 32 字节 `0x` 编码。截止时间须至少剩余 6 秒且不超过报价 timeout。
 - 仅支持 65 字节低 s 的 EOA 签名，`v` 可为 0/1 或 27/28；尚不支持合约钱包签名。
 
@@ -172,14 +197,14 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 
 ```bash
 go mod verify
-go vet . ./exact ./exact/postgres ./examples/client
-go test -race -count=1 -cover . ./exact ./exact/postgres ./examples/client
-go build . ./exact ./exact/postgres ./examples/client
+go vet . ./exact ./exact/postgres ./examples/client ./examples/server
+go test -race -count=1 -cover . ./exact ./exact/postgres ./examples/client ./examples/server
+go build . ./exact ./exact/postgres ./examples/client ./examples/server
 ```
 
 PostgreSQL 集成测试要求 `X402_TEST_DATABASE_URL` 指向专用测试库，并授予创建临时 schema 的权限。每个用例使用独立随机 schema，结束后仅清理自己的 schema；未设置时明确跳过数据库测试，不能当作集成验证通过。CI 配置临时 PostgreSQL 16 并实际执行这些测试。
 
-测试覆盖地址、网络、TronWeb 编码/签名对照、授权/费用/时间边界、模糊测试、模拟 JSON-RPC/原生节点，以及真实 PostgreSQL 下的并发与恢复。包括写前已提交 unknown、节点收到后 ACK 丢失、受理后 SQL 失败、只读恢复且不重播。客户端新增签名前策略拒绝、随机 nonce 并发、外部签名错误/时效、内存签名器关闭和官方 HTTP 握手测试；没有真实链上测试。后续补资源服务端机制、固化执行/到账核验、自建 facilitator 和 Nile 完整示例，再由支付网关引用版本。
+测试覆盖地址、网络、TronWeb 编码/签名对照、授权/费用/时间边界、模糊测试、模拟 JSON-RPC/原生节点，以及真实 PostgreSQL 下的并发与恢复。服务端覆盖严格报价/能力发现、upfront 字段保持与防降级、官方客户端和 net/http 中间件串联，以及模拟失败/超时不执行业务、HEAD 防绕过和付款后业务失败不再次结算；没有真实链上测试。后续补固化执行/到账核验、完整 facilitator 和 Nile 示例，再由支付网关引用版本。
 
 ## 参考与发布状态
 

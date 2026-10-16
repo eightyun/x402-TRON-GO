@@ -1,4 +1,4 @@
-// Package exact 提供 TRON exact Permit2 客户端、授权校验、预检、受限构建及单次广播，不证明已结算。
+// Package exact 提供 TRON exact Permit2 客户端、资源服务端、授权校验及结算底层能力，不证明已结算。
 package exact
 
 import (
@@ -110,12 +110,12 @@ func (verifier *OfflineVerifier) Digest(authorization Permit2Authorization) ([32
 
 // VerifyAuthorization 对照服务端可信报价校验 EOA 授权，now 应由服务端时钟提供。
 // 调用方仍必须进行链上状态、持久化幂等、nonce 和最终结算验证后才能交付资源。
-// 当前仅支持 extra.assetTransferMethod=permit2，不支持其他 extra 或 extensions。
+// 仅支持 permit2 及可选的 paymentFlow=upfront，不支持其他 extra 或 extensions。
 func (verifier *OfflineVerifier) VerifyAuthorization(payload types.PaymentPayload, requirements types.PaymentRequirements, now time.Time) (VerifiedAuthorization, error) {
 	if verifier == nil || verifier.network == "" {
 		return VerifiedAuthorization{}, ErrInvalidConfig
 	}
-	if payload.X402Version != 2 || len(payload.Extensions) != 0 || !validExtra(requirements.Extra) || !validExtra(payload.Accepted.Extra) {
+	if payload.X402Version != 2 || len(payload.Extensions) != 0 || !validExtra(requirements.Extra) || !validExtra(payload.Accepted.Extra) || requirements.Extra["paymentFlow"] != payload.Accepted.Extra["paymentFlow"] {
 		return VerifiedAuthorization{}, ErrInvalidRequirements
 	}
 	asset, recipient, amount, err := verifier.requirements(requirements)
@@ -169,7 +169,7 @@ func (verifier *OfflineVerifier) requirements(requirements types.PaymentRequirem
 }
 
 func validExtra(extra map[string]interface{}) bool {
-	return len(extra) == 1 && extra["assetTransferMethod"] == "permit2"
+	return extra["assetTransferMethod"] == "permit2" && (len(extra) == 1 || len(extra) == 2 && extra["paymentFlow"] == "upfront")
 }
 
 type parsedAuthorization struct {

@@ -2,14 +2,14 @@
 
 [简体中文](README.md) | English
 
-An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Currently provides an official client mechanism, a local HTTP handshake example, authorization verification, read-only preflight, constrained transaction construction, single-attempt broadcast/lookup and an optional durable journal. **Resource-server integration, a complete facilitator, successful-settlement verification and a real testnet round trip are not complete. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
+An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Currently provides official client/resource-server mechanisms, HTTP examples, authorization verification, read-only preflight, constrained transaction construction, single-attempt broadcast/lookup and an optional durable journal. **A complete facilitator, successful-settlement verification and a real testnet round trip are not complete. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
 
 ## Integration status
 
 | Role | Status |
 | --- | --- |
 | Client / agent | Implements official `SchemeNetworkClient`; configure signing/payment policy and use the official HTTP client for 402 retries |
-| API resource server | Official mechanism and complete protected-resource example pending; authorization verification alone must not grant access |
+| API resource server | Implements official `SchemeNetworkServer`, Permit2 quotes and an `upfront` middleware example; requires a trusted facilitator, not just offline verification |
 | Self-hosted facilitator | Construction/broadcast/journaling primitives exist; solidified execution, received-token validation and official mechanism integration pending |
 
 Ordinary clients do not need PostgreSQL or gateway merchant/ledger modules. PostgreSQL is an optional durable storage implementation for self-hosted facilitators. Trusted contracts, asset/recipient policy, wallet signing, gas and necessary Permit2 token approval remain prerequisites; no implicit approval or on-chain action.
@@ -62,6 +62,31 @@ Before signing, the client checks configured network, asset, recipient, per-paym
 
 **Per-payment caps are not aggregate budgets.** Each payload creation issues a new spendable authorization; do not automatically repay unknown outcomes. Authorizations do not bind URLs/request bodies. Restrict trusted origins and budgets, reject unsafe redirects and avoid recovery hooks issuing additional authorizations. Neither HTTP 2xx nor offline verification proves on-chain payment.
 
+## API resource-server integration
+
+Register `exact.NewServer(exact.ServerConfig{Network: network, Asset: asset, PayTo: payTo})` with the official resource server. One trusted network/asset/recipient; no database or wallet key. `ParsePrice` accepts canonical positive atomic-unit strings (`"1000"`), official `x402.AssetAmount` values or strict equivalent maps. **No `$0.01`, floating-point prices or implicit exchange rates.**
+
+Only the official `upfront` flow is enabled. Quotes include `assetTransferMethod: permit2` and `paymentFlow: upfront`; handlers run only after a trusted facilitator reports successful settlement. Pending, unknown, rejected, failed or timed-out results must not be reported as successful. Upfront does not first call `/verify`: **`/settle` must perform complete authorization/preflight, durable submission and solidified execution/received-token verification itself**. Broadcast acceptance is not success.
+
+Startup requires `/supported` to advertise matching v2/exact/canonical network and `permit2` in `extra.supportedAssetTransferMethods`. This existing TRON ecosystem capability field is not copied to payment quotes and is not contract or settlement proof. Independently verify matching client/facilitator contract deployments.
+
+The runnable [server example](examples/server/main.go) uses official net/http middleware. Set the following environment variables, then run `go run ./examples/server`:
+
+| Variable | Meaning |
+| --- | --- |
+| `X402_NETWORK` | Defaults to Nile: `tron:3448148188` |
+| `X402_ASSET` | Required trusted token address |
+| `X402_PAY_TO` | Required merchant recipient |
+| `X402_PRICE_ATOMIC` | Required positive atomic-unit price |
+| `X402_FACILITATOR_URL` | Required trusted HTTPS base URL; no userinfo/query/fragment |
+| `X402_LISTEN_ADDR` | Defaults to `127.0.0.1:8080` |
+
+Explicit initialization and quote validation happen before listening; failures stop startup. `GET /resource` returns 402 without payment. HEAD is rejected to prevent Go GET-route HEAD matching from bypassing payment. Includes bounded startup/settlement/HTTP timeouts, no upstream redirects, bounded headers and graceful shutdown. External deployment needs TLS ingress and appropriate authentication. Use official `AuthProvider` for facilitator credentials, never URL tokens.
+
+**This repository does not yet provide a complete facilitator for real payments.** Configure a separately verified service; no public facilitator is assumed and no real remote deployment was accepted. Successful facilitators used in automated tests exist only in test code and demonstrate control flow, not blockchain settlement.
+
+Upfront payment is not automatically refunded if the handler later fails; do not settle again. Applications need fulfillment idempotency, lookup and compensation. New upfront quotes require the updated client; existing no-paymentFlow quotes/signatures remain compatible. The digest does not bind paymentFlow; the verifier and official server compare accepted terms with the trusted quote to prevent stripping/downgrading it.
+
 ## Available utilities
 
 - `NormalizeNetwork` and `ChainID`: Mainnet, Nile, Shasta; known legacy hexadecimal aliases normalize to decimal CAIP-2 identifiers.
@@ -76,7 +101,7 @@ The root package uses only the standard library. The `exact` package uses offici
 
 `Digest` computes the TIP-712 digest for external signing. `VerifyAuthorization` consumes official SDK `types.PaymentPayload`, trusted server-side `types.PaymentRequirements` and server time. It binds the quote, network, token, amount, recipient, proxy, nonce and validity, then recovers the EOA signer.
 
-Current subset: only `extra: {assetTransferMethod: "permit2"}`, no other extra fields or nonempty extensions; two-field witness (`to`, `validAfter`); strict TRON addresses in configuration/requirements and 20-byte `0x` addresses in authorizations; canonical decimal uint256 amounts/times, decimal or 32-byte hex nonces. Deadline must have at least six seconds remaining, bounded by the quote timeout. Only 65-byte low-s EOA signatures with v=0/1 or 27/28; no contract-wallet signatures.
+Current subset: required `extra.assetTransferMethod: "permit2"`, optional `paymentFlow: "upfront"`, no other fields/flows or nonempty extensions. Accepted and trusted quote flows must match. Two-field witness (`to`, `validAfter`); strict TRON addresses in configuration/requirements and 20-byte `0x` addresses in authorizations; canonical decimal uint256 amounts/times, decimal or 32-byte hex nonces. Deadline must have at least six seconds remaining, bounded by the quote timeout. Only 65-byte low-s EOA signatures with v=0/1 or 27/28; no contract-wallet signatures.
 
 **Valid authorization is not proof of funds or settlement.** No balance, allowance, nonce bitmap or chain-state checks; no nonce consumption or concurrency/replay protection. Repeated verification can succeed. **Do not deliver paid resources from this result.** Chain preflight, durable idempotency, settlement and final outcome verification remain necessary.
 
@@ -140,16 +165,16 @@ Requires Go 1.26+. CI uses 1.26.x. No release exists; public APIs may change.
 
 ```bash
 go mod verify
-go vet . ./exact ./exact/postgres ./examples/client
-go test -race -count=1 -cover . ./exact ./exact/postgres ./examples/client
-go build . ./exact ./exact/postgres ./examples/client
+go vet . ./exact ./exact/postgres ./examples/client ./examples/server
+go test -race -count=1 -cover . ./exact ./exact/postgres ./examples/client ./examples/server
+go build . ./exact ./exact/postgres ./examples/client ./examples/server
 ```
 
 Inputs are strict: no whitespace trimming, unknown networks, wildcards, or decimal leading zeros. Namespace must be `tron`; legacy hexadecimal references are case-insensitive. Addresses must be 34-character Base58Check or 42-character `41`-prefixed hex. Arbitrary `0x` addresses are not accepted as TRON input. Formatting is not authorization verification.
 
 Database tests require `X402_TEST_DATABASE_URL` pointing to a dedicated PostgreSQL database with permission to create temporary schemas. Each test creates and cleans only its own random schema. Without this variable integration tests explicitly skip; this is not a passing database acceptance run. CI provisions PostgreSQL 16 and runs them.
 
-Tests cover public TronWeb vectors, tampering, uint256/fee/time boundaries, canonicality, fuzzing, simulated JSON-RPC/native nodes and actual PostgreSQL concurrency/recovery. They check unknown is committed before sending, ACK loss after node receipt, acceptance-persistence failure and read-only recovery without rebroadcast. Client tests add pre-signing policy rejection, concurrent random nonces, signer failures/timeouts, signer closure and the official HTTP handshake. No live-chain acceptance is claimed. Next: resource-server mechanisms, solidified execution/token-receipt checks, a complete facilitator and a Nile round-trip example before gateway integration.
+Tests cover public TronWeb vectors, tampering, uint256/fee/time boundaries, canonicality, fuzzing, simulated JSON-RPC/native nodes and actual PostgreSQL concurrency/recovery. Server tests add strict pricing/capability discovery, upfront preservation/downgrade rejection, the official client/net/http round trip, no handler execution on simulated failures/timeouts, HEAD bypass protection and no second settlement on handler failure. No live-chain acceptance is claimed. Next: solidified execution/token-receipt checks, a complete facilitator and a Nile round-trip example before gateway integration.
 
 ## References and status
 

@@ -106,8 +106,12 @@ func (client *Client) CreatePaymentPayload(ctx context.Context, requirements typ
 	if seconds < 6 {
 		return types.PaymentPayload{}, ErrInvalidValidity
 	}
-	// 只接受一个字符串 extra，复制后不再共享调用方的 map。
-	requirements.Extra = map[string]interface{}{"assetTransferMethod": "permit2"}
+	// 已验证的 extra 只含允许的字符串字段，复制后不再共享调用方的 map。
+	extra := make(map[string]interface{}, len(requirements.Extra))
+	for key, value := range requirements.Extra {
+		extra[key] = value
+	}
+	requirements.Extra = extra
 	var nonce [32]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return types.PaymentPayload{}, ErrClientSign
