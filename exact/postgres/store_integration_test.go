@@ -427,3 +427,48 @@ func TestScopeCancellationAndDatabaseError(t *testing.T) {
 		t.Fatalf("写入错误未脱敏：%v", err)
 	}
 }
+
+func TestBuiltSettlementPersistsAndRetainsIdenticalBytes(t *testing.T) {
+	t.Parallel()
+	ctx, _, store, input := setup(t)
+	data, err := os.ReadFile("../testdata/tronweb-settlement.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Config    exact.SettlementBuilderConfig `json:"config"`
+		Reference exact.ReferenceBlock          `json:"reference"`
+		Signature string                        `json:"signature"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	reserved := reserve(t, ctx, store, input)
+	builder, err := exact.NewSettlementBuilder(fixture.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := builder.Build(envelope(t, input), input.Requirements, fixture.Reference, time.Unix(input.Now, 0))
+	if err != nil || prepared.Authorization() != reserved.Authorization {
+		t.Fatalf("日志授权与构建授权不一致：%v", err)
+	}
+	signature, err := hex.DecodeString(fixture.Signature)
+	if err != nil {
+		t.Fatal("公开签名编码错误")
+	}
+	signed, err := prepared.Sign(ctx, func(context.Context, [32]byte) ([]byte, error) { return signature, nil }, time.Unix(input.Now, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.SaveTransaction(ctx, reserved.ID, reserved.Authorization.Digest, postgres.Transaction{ID: signed.ID, Payload: signed.Payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.BeginBroadcast(ctx, reserved.ID, reserved.Authorization.Digest)
+	if err != nil || recovered.Transaction == nil || recovered.Transaction.ID != signed.ID || !bytes.Equal(recovered.Transaction.Payload, signed.Payload) {
+		t.Fatalf("持久化阶段替换了原交易：%v", err)
+	}
+	if err := prepared.ValidateSigned(exact.SettlementTransaction{ID: recovered.Transaction.ID, Payload: recovered.Transaction.Payload}); err != nil {
+		t.Fatalf("取回的交易不再匹配原授权和签名：%v", err)
+	}
+}

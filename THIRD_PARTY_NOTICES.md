@@ -6,7 +6,7 @@
 - secp256k1/v4 v4.4.1：ISC，来源 https://github.com/decred/dcrd/tree/master/dcrec/secp256k1 。
 - pgx/v5 v5.7.6 及 pgpassfile、pgservicefile、puddle/v2：可选 PostgreSQL 适配器使用，MIT，来源 https://github.com/jackc/pgx 、https://github.com/jackc/pgpassfile 、https://github.com/jackc/pgservicefile 和 https://github.com/jackc/puddle 。
 - golang.org/x/crypto v0.46.0、x/sys v0.40.0、x/sync v0.19.0 及 x/text v0.32.0：BSD-3-Clause，来源 https://go.googlesource.com/crypto/ 、https://go.googlesource.com/sys/ 、https://go.googlesource.com/sync/ 和 https://go.googlesource.com/text/ 。
-- TronWeb 6.3.0：仅作为离线测试向量生成/验签工具，不是 Go 运行依赖；MIT，来源 https://github.com/tronprotocol/tronweb 。公开向量不包含私钥。
+- TronWeb 6.3.0：仅作为离线授权/结算交易向量生成、ABI/Protobuf 编码和验签工具，不是 Go 运行依赖；MIT，来源 https://github.com/tronprotocol/tronweb 。公开向量使用合成区块，不包含私钥。
 - BANK OF AI TRON mechanism，参考版本 e50e9f09149203a97e35110ee1cd64073487f30d：用于核对 wire 字段、签名域和二字段 witness。来源 https://github.com/BofAI/x402/tree/e50e9f09149203a97e35110ee1cd64073487f30d/typescript/packages/mechanisms/tron 。保留仓库级 MIT 声明如下；不表示对其所有软件或合约安全作出保证。
 
 MIT License

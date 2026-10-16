@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-An independent Go project for TRON support in x402, providing network/address utilities, offline `exact` Permit2 authorization verification, read-only chain preflight and an optional durable settlement journal. **No complete client, facilitator, or on-chain settlement is available. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
+An independent Go project for TRON support in x402, providing network/address utilities, offline `exact` Permit2 authorization verification, read-only preflight, constrained settlement construction/external-signature validation and an optional durable journal. **No complete client, facilitator, or actual broadcast/on-chain settlement is available. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
 
 ## Available utilities
 
@@ -40,6 +40,18 @@ TRON [eth_call](https://developers.tron.network/reference/eth_call) and [eth_get
 
 HTTPS is required by default; redirects are blocked. API keys use only the `TRON-PRO-API-KEY` header. URLs cannot contain credentials, query or fragment. An optional `HTTPClient` supports trusted CA/proxy settings without in-place mutation. Explicit `AllowInsecureLocalHTTP` permits only loopback/localhost development nodes. Never derive node configuration from payment requests.
 
+## Constrained settlement construction and external signing
+
+`exact.NewSettlementBuilder` requires trusted `Authorization`, an explicit gas-paying `ExecutorAddress`, positive `FeeLimitSUN`, and a whole-millisecond `Lifetime` greater than 15 seconds and at most 10 minutes. No default mainnet/contracts, private-key custody or arbitrary node-built transaction JSON.
+
+`Build` validates payment authorization and uses a trusted `ReferenceBlock` plus server time to locally construct one exact-proxy `settle` call, TAPOS and TRON raw Protobuf. The transaction ID is `SHA-256(raw_data)`. Reference network, height and ID must match; block time may be at most 60 seconds old or five seconds ahead. This does not prove chain membership, finality or honest RPC responses: deployment and chain preflight remain required. Expiry is capped by the payment deadline; construction and both sides of signing require at least 15 seconds remaining.
+
+The returned `PreparedSettlement` is immutable. `RawData()` returns a copy containing the payment authorization signature: keep it confidential. `Sign(ctx, DigestSigner, now)` sends only the fixed SHA-256 digest to the caller's external signer, then recovers the gas payer's public key. Elapsed signing time counts against validity; original signer error messages are not exposed. Signatures are low-s, 65-byte `r||s||v`; accept v=0/1 or 27/28 and emit canonical v=0/1. The payer's TIP-712 authorization and the executor's transaction signature are distinct; their digests are not interchangeable.
+
+`SettlementTransaction.Payload` is **complete binary Transaction Protobuf, not JSON**, suitable for a later hex-encoded [broadcasthex](https://developers.tron.network/reference/broadcasthex) request. `ValidateSigned` accepts only this prepared object's canonical encoding and checks all raw bytes, ID and signature. Unknown/duplicate fields, attached TRX/TRC10, extra contracts/signatures or changed fee policy are rejected. This is not a generic transaction importer, current-expiry check or receipt proof.
+
+Only a single EOA using default owner permission is supported; no multisig, custom permissions or contract wallets. On-chain permissions, fee resources and execution outcomes still require verification. No key loader, RPC broadcaster or successful settlement state yet. Persist the unique signed transaction and obtain journal broadcast permission before submission; never extend or rebuild a payment during recovery. The public [TronWeb settlement vector](exact/testdata/tronweb-settlement.json) uses a synthetic block and a discarded random executor key: encoding/signature interoperability only, not live testnet acceptance.
+
 ## Durable settlement journal (optional PostgreSQL)
 
 `exact/postgres.New` accepts a caller-managed `pgxpool.Pool` and trusted `exact.Config`. Explicitly apply [schema.sql](exact/postgres/schema.sql), also available as `SchemaSQL`, under a dedicated trusted `search_path`; construction never runs DDL. Other packages do not require a database. No dependency on the payment gateway or merchant ledger.
@@ -49,7 +61,7 @@ HTTPS is required by default; redirects are blocked. API keys use only the `TRON
 - `BeginBroadcast` commits `broadcast_unknown` **before** returning the sole broadcast permission and persisted transaction. Never broadcast unsaved local data or proceed without this call succeeding.
 - `RecordAccepted` records node acceptance as `pending`, not success. Timeout, process exit, missing transaction or an ambiguous database commit requires `Get` and tracking the original txid, never re-signing, replacement or automatic new payment. A crash before actual submission may also leave unknown; automatic rebroadcast or reservation release is not implemented.
 
-These guarantees apply only to cooperating instances sharing the same journal. Reservation does not lock on-chain nonce or funds. Transaction bytes are opaque: a trusted builder must validate ID, signatures, authorization binding and expiry. The journal does not establish these properties. Actual transaction construction, signing, broadcasting and finalized execution/receipt validation remain unimplemented. **No journal state permits resource delivery; this is not an exactly-once on-chain payment guarantee.**
+These guarantees apply only to cooperating instances sharing the same journal. Reservation does not lock on-chain nonce or funds. The store still treats transaction bytes as opaque: use the builder above to validate ID, signatures, authorization binding and expiry, then persist ID/Payload; never accept arbitrary transaction bytes from payment requests. Actual broadcasting and finalized execution/receipt validation remain unimplemented. **No journal state permits resource delivery; this is not an exactly-once on-chain payment guarantee.**
 
 Signed payloads can be broadcast: use least-privilege database access, encryption and backups. `Transaction.Payload` is excluded from JSON but must never be logged manually. Runtime accounts should lack DELETE/TRUNCATE privileges; do not automatically purge expired reservations or delete history when rolling back code. CI's temporary localhost database uses trust authentication and is **not a deployment configuration**.
 
@@ -68,7 +80,7 @@ Inputs are strict: no whitespace trimming, unknown networks, wildcards, or decim
 
 Database tests require `X402_TEST_DATABASE_URL` pointing to a dedicated PostgreSQL database with permission to create temporary schemas. Each test creates and cleans only its own random schema. Without this variable integration tests explicitly skip; this is not a passing database acceptance run. CI provisions PostgreSQL 16 and runs them.
 
-Tests cover public vectors, independent encoding checks, authorization tampering, uint256/time boundaries, signature canonicality, fuzz seeds, simulated-node preflight failures and actual PostgreSQL concurrency/recovery. Journal test payloads are storage fixtures, not valid on-chain transactions. No live-chain acceptance is claimed. Next: trusted transaction construction/signing, broadcast and finality checks, official SDK mechanism interfaces and Nile interoperability before gateway integration.
+Tests cover public TronWeb authorization/transaction encoding and signatures, tampering, uint256/fee/time boundaries, signature canonicality, fuzzing, simulated-node preflight failures and actual PostgreSQL concurrency/recovery. Journal test payloads are storage fixtures, not valid on-chain transactions. No live-chain acceptance is claimed. Next: broadcast and finality checks, official SDK mechanism interfaces and Nile interoperability before gateway integration.
 
 ## References and status
 
