@@ -1,4 +1,4 @@
-// Package exact 提供 TRON exact Permit2 授权校验、预检、受限构建及单次广播，不证明已结算。
+// Package exact 提供 TRON exact Permit2 客户端、授权校验、预检、受限构建及单次广播，不证明已结算。
 package exact
 
 import (

@@ -2,7 +2,65 @@
 
 [简体中文](README.md) | English
 
-An independent Go project for TRON support in x402, providing network/address utilities, `exact` Permit2 verification, read-only preflight, constrained construction/signature validation, single-attempt broadcast, original-transaction lookup and an optional durable journal. **No complete client, facilitator, successful-settlement validation or real testnet acceptance yet. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
+An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Currently provides an official client mechanism, a local HTTP handshake example, authorization verification, read-only preflight, constrained transaction construction, single-attempt broadcast/lookup and an optional durable journal. **Resource-server integration, a complete facilitator, successful-settlement verification and a real testnet round trip are not complete. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
+
+## Integration status
+
+| Role | Status |
+| --- | --- |
+| Client / agent | Implements official `SchemeNetworkClient`; configure signing/payment policy and use the official HTTP client for 402 retries |
+| API resource server | Official mechanism and complete protected-resource example pending; authorization verification alone must not grant access |
+| Self-hosted facilitator | Construction/broadcast/journaling primitives exist; solidified execution, received-token validation and official mechanism integration pending |
+
+Ordinary clients do not need PostgreSQL or gateway merchant/ledger modules. PostgreSQL is an optional durable storage implementation for self-hosted facilitators. Trusted contracts, asset/recipient policy, wallet signing, gas and necessary Permit2 token approval remain prerequisites; no implicit approval or on-chain action.
+
+## Client quick start
+
+Requires Go 1.26+. No stable release yet. From a clone:
+
+```bash
+go run ./examples/client
+```
+
+Uses a random ephemeral in-process key and a loopback fixture with the real official SDK: `402 → TRON authorization → PAYMENT-SIGNATURE retry → 202 authorization verified, not settled`. No blockchain, existing wallet, transaction or successful-settlement response. Public fixture addresses are not trusted deployment configurations. This is not a complete on-chain round trip.
+
+Register the mechanism in an application without building authorization fields, nonces or TIP-712 digests yourself:
+
+```go
+import (
+    "net/http"
+    "time"
+
+    "github.com/eightyun/x402-tron-go/exact"
+    x402 "github.com/x402-foundation/x402/go/v2"
+    x402http "github.com/x402-foundation/x402/go/v2/http"
+)
+
+func paymentHTTPClient(contracts exact.Config, signer *exact.EOASigner, asset, payTo, maxAmount string) (*http.Client, error) {
+    mechanism, err := exact.NewClient(exact.ClientConfig{
+        Authorization: contracts, PayerAddress: signer.Address(),
+        Asset: asset, PayTo: payTo, MaxAmount: maxAmount,
+        Signer: signer.SignAuthorization,
+    })
+    if err != nil {
+        return nil, err
+    }
+    network := x402.Network(mechanism.Network())
+    core := x402.Newx402Client(x402.WithSpendControls(x402.SpendControls{
+        AllowedAssets: []x402.SpendControlAsset{{Network: network, Asset: asset, MaxAmountPerPayment: maxAmount}},
+    })).Register(network, mechanism)
+    return x402http.WrapHTTPClientWithPayment(&http.Client{
+        Timeout: 15 * time.Second,
+        CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+    }, x402http.Newx402HTTPClient(core)), nil
+}
+```
+
+Optional `exact.NewEOASigner(keyBytes)` copies a strictly valid nonzero 32-byte private key into memory. Manage the original input and call `Close()` when finished. No file/env loading or key export; common formatting and JSON do not expose internal scalars. Best-effort memory clearing is not secure hardware. Production applications can supply an external `ClientConfig.Signer`: sign the **already computed TIP-712 digest**, without rehashing, personal-sign prefixes or confusing it with transaction SHA-256 signing.
+
+Before signing, the client checks configured network, asset, recipient, per-payment `MaxAmount` and the official SDK's supplied atomic cap. Unknown extra fields/nonempty extensions are rejected. `Lifetime` defaults to 60 seconds, accepts whole seconds from 6 seconds to 10 minutes, and is bounded by the quote timeout. Signature and remaining validity are rechecked after signing. External signers must support concurrency and bounded contexts; their raw errors are redacted. No balance/allowance reads. Never derive trusted policy from an untrusted 402 quote.
+
+**Per-payment caps are not aggregate budgets.** Each payload creation issues a new spendable authorization; do not automatically repay unknown outcomes. Authorizations do not bind URLs/request bodies. Restrict trusted origins and budgets, reject unsafe redirects and avoid recovery hooks issuing additional authorizations. Neither HTTP 2xx nor offline verification proves on-chain payment.
 
 ## Available utilities
 
@@ -82,16 +140,16 @@ Requires Go 1.26+. CI uses 1.26.x. No release exists; public APIs may change.
 
 ```bash
 go mod verify
-go vet . ./exact ./exact/postgres
-go test -race -count=1 -cover . ./exact ./exact/postgres
-go build . ./exact ./exact/postgres
+go vet . ./exact ./exact/postgres ./examples/client
+go test -race -count=1 -cover . ./exact ./exact/postgres ./examples/client
+go build . ./exact ./exact/postgres ./examples/client
 ```
 
 Inputs are strict: no whitespace trimming, unknown networks, wildcards, or decimal leading zeros. Namespace must be `tron`; legacy hexadecimal references are case-insensitive. Addresses must be 34-character Base58Check or 42-character `41`-prefixed hex. Arbitrary `0x` addresses are not accepted as TRON input. Formatting is not authorization verification.
 
 Database tests require `X402_TEST_DATABASE_URL` pointing to a dedicated PostgreSQL database with permission to create temporary schemas. Each test creates and cleans only its own random schema. Without this variable integration tests explicitly skip; this is not a passing database acceptance run. CI provisions PostgreSQL 16 and runs them.
 
-Tests cover public TronWeb vectors, tampering, uint256/fee/time boundaries, canonicality, fuzzing, simulated JSON-RPC/native nodes and actual PostgreSQL concurrency/recovery. They check unknown is committed before sending, ACK loss after node receipt, acceptance-persistence failure and read-only recovery without rebroadcast. Earlier journal tests use opaque fixtures; composed tests use public Protobuf vectors. No live-chain acceptance is claimed. Next: solidified receipts, execution/token-receipt validation, official SDK mechanism interfaces and Nile interoperability before gateway integration.
+Tests cover public TronWeb vectors, tampering, uint256/fee/time boundaries, canonicality, fuzzing, simulated JSON-RPC/native nodes and actual PostgreSQL concurrency/recovery. They check unknown is committed before sending, ACK loss after node receipt, acceptance-persistence failure and read-only recovery without rebroadcast. Client tests add pre-signing policy rejection, concurrent random nonces, signer failures/timeouts, signer closure and the official HTTP handshake. No live-chain acceptance is claimed. Next: resource-server mechanisms, solidified execution/token-receipt checks, a complete facilitator and a Nile round-trip example before gateway integration.
 
 ## References and status
 
