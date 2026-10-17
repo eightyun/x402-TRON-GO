@@ -72,7 +72,7 @@ func RestoreSettlement(config Config, executorAddress string, transaction Settle
 	prefix = binary.AppendUvarint(prefix, 65)
 	prepared := &PreparedSettlement{
 		raw: canonical, prefix: prefix, digest: digest, authorization: authorization,
-		payment: payment, executor: executor, createdAt: createdAt, expiresAt: expiresAt,
+		payment: payment, executor: executor, fee: int64(fee), createdAt: createdAt, expiresAt: expiresAt,
 	}
 	if err := prepared.ValidateSigned(transaction); err != nil {
 		return nil, err

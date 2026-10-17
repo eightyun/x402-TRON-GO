@@ -112,30 +112,9 @@ func (verifier *OfflineVerifier) Digest(authorization Permit2Authorization) ([32
 // 调用方仍必须进行链上状态、持久化幂等、nonce 和最终结算验证后才能交付资源。
 // 仅支持 permit2 及可选的 paymentFlow=upfront，不支持其他 extra 或 extensions。
 func (verifier *OfflineVerifier) VerifyAuthorization(payload types.PaymentPayload, requirements types.PaymentRequirements, now time.Time) (VerifiedAuthorization, error) {
-	if verifier == nil || verifier.network == "" {
-		return VerifiedAuthorization{}, ErrInvalidConfig
-	}
-	if payload.X402Version != 2 || len(payload.Extensions) != 0 || !validExtra(requirements.Extra) || !validExtra(payload.Accepted.Extra) || requirements.Extra["paymentFlow"] != payload.Accepted.Extra["paymentFlow"] {
-		return VerifiedAuthorization{}, ErrInvalidRequirements
-	}
-	asset, recipient, amount, err := verifier.requirements(requirements)
+	raw, authorization, err := verifier.boundAuthorization(payload, requirements)
 	if err != nil {
 		return VerifiedAuthorization{}, err
-	}
-	acceptedAsset, acceptedRecipient, acceptedAmount, err := verifier.requirements(payload.Accepted)
-	if err != nil || acceptedAsset != asset || acceptedRecipient != recipient || acceptedAmount != amount || payload.Accepted.MaxTimeoutSeconds != requirements.MaxTimeoutSeconds {
-		return VerifiedAuthorization{}, ErrInvalidRequirements
-	}
-	raw, err := parsePayload(payload.Payload)
-	if err != nil {
-		return VerifiedAuthorization{}, err
-	}
-	authorization, err := parseAuthorization(raw.Authorization)
-	if err != nil {
-		return VerifiedAuthorization{}, err
-	}
-	if authorization.token != asset || authorization.to != recipient || authorization.amount != amount || authorization.spender != verifier.proxy {
-		return VerifiedAuthorization{}, ErrInvalidAuthorization
 	}
 	nowSeconds := now.Unix()
 	remaining := new(big.Int).Sub(new(big.Int).SetBytes(authorization.deadline[:]), big.NewInt(nowSeconds))
@@ -143,6 +122,50 @@ func (verifier *OfflineVerifier) VerifyAuthorization(payload types.PaymentPayloa
 	if nowSeconds < 0 || remaining.Cmp(big.NewInt(6)) < 0 || remaining.Cmp(big.NewInt(int64(requirements.MaxTimeoutSeconds))) > 0 || validAfter.Cmp(big.NewInt(nowSeconds)) > 0 {
 		return VerifiedAuthorization{}, ErrInvalidValidity
 	}
+	return verifier.verifyBoundSignature(raw, authorization)
+}
+
+// VerifyAuthorizationBinding 只识别已签名授权与可信报价的历史绑定，不检查当前有效期。
+// 仅可对照已存在的持久化记录做恢复；不能用于新付款准入、签名、广播或资源交付。
+// 新请求必须另行使用 VerifyAuthorization/Preflight.Check 和当前服务端时间。
+func (verifier *OfflineVerifier) VerifyAuthorizationBinding(payload types.PaymentPayload, requirements types.PaymentRequirements) (VerifiedAuthorization, error) {
+	raw, authorization, err := verifier.boundAuthorization(payload, requirements)
+	if err != nil {
+		return VerifiedAuthorization{}, err
+	}
+	return verifier.verifyBoundSignature(raw, authorization)
+}
+
+func (verifier *OfflineVerifier) boundAuthorization(payload types.PaymentPayload, requirements types.PaymentRequirements) (Permit2Payload, parsedAuthorization, error) {
+	if verifier == nil || verifier.network == "" {
+		return Permit2Payload{}, parsedAuthorization{}, ErrInvalidConfig
+	}
+	if payload.X402Version != 2 || len(payload.Extensions) != 0 || !validExtra(requirements.Extra) || !validExtra(payload.Accepted.Extra) || requirements.Extra["paymentFlow"] != payload.Accepted.Extra["paymentFlow"] {
+		return Permit2Payload{}, parsedAuthorization{}, ErrInvalidRequirements
+	}
+	asset, recipient, amount, err := verifier.requirements(requirements)
+	if err != nil {
+		return Permit2Payload{}, parsedAuthorization{}, err
+	}
+	acceptedAsset, acceptedRecipient, acceptedAmount, err := verifier.requirements(payload.Accepted)
+	if err != nil || acceptedAsset != asset || acceptedRecipient != recipient || acceptedAmount != amount || payload.Accepted.MaxTimeoutSeconds != requirements.MaxTimeoutSeconds {
+		return Permit2Payload{}, parsedAuthorization{}, ErrInvalidRequirements
+	}
+	raw, err := parsePayload(payload.Payload)
+	if err != nil {
+		return Permit2Payload{}, parsedAuthorization{}, err
+	}
+	authorization, err := parseAuthorization(raw.Authorization)
+	if err != nil {
+		return Permit2Payload{}, parsedAuthorization{}, err
+	}
+	if authorization.token != asset || authorization.to != recipient || authorization.amount != amount || authorization.spender != verifier.proxy {
+		return Permit2Payload{}, parsedAuthorization{}, ErrInvalidAuthorization
+	}
+	return raw, authorization, nil
+}
+
+func (verifier *OfflineVerifier) verifyBoundSignature(raw Permit2Payload, authorization parsedAuthorization) (VerifiedAuthorization, error) {
 	digest := verifier.digest(authorization)
 	if !verifySignature(digest, raw.Signature, authorization.from) {
 		return VerifiedAuthorization{}, ErrInvalidSignature

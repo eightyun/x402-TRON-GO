@@ -39,9 +39,10 @@ type PreflightConfig struct {
 
 // PreflightResult 仅记录本轮只读观察，不是最终性、扣款或结算证明。
 type PreflightResult struct {
-	Authorization VerifiedAuthorization
-	BlockNumber   uint64
-	BlockHash     string
+	Authorization  VerifiedAuthorization
+	BlockNumber    uint64
+	BlockHash      string
+	BlockTimestamp time.Time
 }
 
 // PreflightVerifier 组合离线验签和链上状态预检，不持有密钥、消费 nonce 或广播交易。
@@ -150,7 +151,7 @@ func (verifier *PreflightVerifier) Check(ctx context.Context, payload types.Paym
 	if err := ctx.Err(); err != nil {
 		return PreflightResult{}, err
 	}
-	return PreflightResult{Authorization: verified, BlockNumber: after.Number, BlockHash: "0x" + hex.EncodeToString(after.Hash[:])}, nil
+	return PreflightResult{Authorization: verified, BlockNumber: after.Number, BlockHash: "0x" + hex.EncodeToString(after.Hash[:]), BlockTimestamp: time.Unix(after.Timestamp, 0).UTC()}, nil
 }
 
 func (verifier *PreflightVerifier) checkChain(ctx context.Context) error {

@@ -72,6 +72,7 @@ type PreparedSettlement struct {
 	authorization VerifiedAuthorization
 	payment       parsedAuthorization
 	executor      [20]byte
+	fee           int64
 	createdAt     time.Time
 	expiresAt     time.Time
 }
@@ -133,7 +134,7 @@ func (builder *SettlementBuilder) Build(payload types.PaymentPayload, requiremen
 	prefix = binary.AppendUvarint(prefix, 65)
 	return &PreparedSettlement{
 		raw: raw, prefix: prefix, digest: sha256.Sum256(raw), authorization: verified, payment: authorization,
-		executor: builder.executor, createdAt: createdAt, expiresAt: expiresAt,
+		executor: builder.executor, fee: builder.fee, createdAt: createdAt, expiresAt: expiresAt,
 	}, nil
 }
 
@@ -176,6 +177,14 @@ func (prepared *PreparedSettlement) ExpiresAt() time.Time {
 		return time.Time{}
 	}
 	return prepared.expiresAt
+}
+
+// FeeLimitSUN 返回原签名内容固定的费用上限，供恢复后的当前广播策略核对。
+func (prepared *PreparedSettlement) FeeLimitSUN() int64 {
+	if prepared == nil {
+		return 0
+	}
+	return prepared.fee
 }
 
 // Sign 调用外部签名器并恢复公钥核对费用付款方，签名前后均检查剩余有效期。

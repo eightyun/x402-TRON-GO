@@ -35,7 +35,7 @@ func TestRestoreSettlementHistoricalOriginalPayment(t *testing.T) {
 		t.Fatal(err)
 	}
 	original := preparedFor(t, fixture, input)
-	if restored.Authorization() != original.Authorization() || restored.ID() != original.ID() || !bytes.Equal(restored.RawData(), original.RawData()) || !restored.ExpiresAt().Equal(original.ExpiresAt()) {
+	if restored.Authorization() != original.Authorization() || restored.ID() != original.ID() || !bytes.Equal(restored.RawData(), original.RawData()) || !restored.ExpiresAt().Equal(original.ExpiresAt()) || restored.FeeLimitSUN() != fixture.Config.FeeLimitSUN {
 		t.Fatal("恢复改变了原授权、交易字节或有效期")
 	}
 	if err := restored.ValidateSigned(tx); err != nil {

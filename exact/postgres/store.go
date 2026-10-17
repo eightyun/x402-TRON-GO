@@ -116,8 +116,7 @@ func (store *Store) Reserve(ctx context.Context, payload types.PaymentPayload, r
 	if err != nil {
 		return Record{}, err
 	}
-	identity := sha256.Sum256([]byte(store.network + "\x00" + store.permit2 + "\x00" + verified.Payer + "\x00" + verified.Nonce))
-	id := hex.EncodeToString(identity[:])
+	id := store.authorizationID(verified)
 	_, err = store.db.Exec(ctx, `
 		INSERT INTO x402_tron_settlements (id, network, permit2_address, payer, nonce, digest)
 		VALUES ($1, $2, $3, $4, $5, $6)
@@ -137,6 +136,11 @@ func (store *Store) Reserve(ctx context.Context, payload types.PaymentPayload, r
 		return Record{}, ErrConflict
 	}
 	return record, nil
+}
+
+func (store *Store) authorizationID(verified exact.VerifiedAuthorization) string {
+	identity := sha256.Sum256([]byte(store.network + "\x00" + store.permit2 + "\x00" + verified.Payer + "\x00" + verified.Nonce))
+	return hex.EncodeToString(identity[:])
 }
 
 const recordColumns = `id, network, permit2_address, payer, nonce::TEXT, digest, state,
@@ -162,7 +166,20 @@ func (store *Store) SaveTransaction(ctx context.Context, id string, digest [32]b
 	if digest == [32]byte{} || !validTransactionID(transaction.ID) || len(transaction.Payload) == 0 || len(transaction.Payload) > 1<<20 {
 		return Record{}, ErrInvalidInput
 	}
-	record, err := scanRecord(ctx, store.db.QueryRow(ctx, `
+	record, err := store.saveTransaction(ctx, store.db, id, digest, transaction)
+	if errors.Is(err, ErrNotFound) {
+		return Record{}, store.missingOrConflict(ctx, id)
+	}
+	return record, err
+}
+
+// rowQuerier 仅用于连接池与显式事务共享同一保存语句，不将事务内写入旁路到连接池。
+type rowQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func (store *Store) saveTransaction(ctx context.Context, db rowQuerier, id string, digest [32]byte, transaction Transaction) (Record, error) {
+	return scanRecord(ctx, db.QueryRow(ctx, `
 		UPDATE x402_tron_settlements
 		SET state = CASE WHEN state = 'reserved' THEN 'prepared' ELSE state END,
 		    transaction_id = $5, signed_payload = $6,
@@ -170,10 +187,6 @@ func (store *Store) SaveTransaction(ctx context.Context, id string, digest [32]b
 		WHERE id = $1 AND network = $2 AND permit2_address = $3 AND digest = $4
 		  AND (state = 'reserved' OR (transaction_id = $5 AND signed_payload = $6))
 		RETURNING `+recordColumns, id, store.network, store.permit2, digest[:], transaction.ID, transaction.Payload))
-	if errors.Is(err, ErrNotFound) {
-		return Record{}, store.missingOrConflict(ctx, id)
-	}
-	return record, err
 }
 
 // BeginBroadcast 是唯一的广播许可：先提交 unknown，再返回数据库中的原始签名结果。
