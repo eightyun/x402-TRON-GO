@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Currently provides official client/resource-server mechanisms, HTTP examples, authorization verification, read-only preflight, constrained transaction construction, single-attempt broadcast/lookup and an optional durable journal. **A complete facilitator, successful-settlement verification and a real testnet round trip are not complete. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
+An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Currently provides official client/resource-server mechanisms, HTTP examples, authorization/preflight, constrained transaction construction, broadcast/lookup, read-only solidified payment-event checks and an optional durable journal. **A complete facilitator, verification recovery after restart and a real testnet round trip are not complete. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
 
 ## Integration status
 
@@ -10,7 +10,7 @@ An independent TRON adapter SDK for x402: clients/agents, API resource servers a
 | --- | --- |
 | Client / agent | Implements official `SchemeNetworkClient`; configure signing/payment policy and use the official HTTP client for 402 retries |
 | API resource server | Implements official `SchemeNetworkServer`, Permit2 quotes and an `upfront` middleware example; requires a trusted facilitator, not just offline verification |
-| Self-hosted facilitator | Construction/broadcast/journaling primitives exist; solidified execution, received-token validation and official mechanism integration pending |
+| Self-hosted facilitator | Construction/broadcast/journal and read-only solidified payment checks exist; durable verification recovery, success states and official mechanism integration pending |
 
 Ordinary clients do not need PostgreSQL or gateway merchant/ledger modules. PostgreSQL is an optional durable storage implementation for self-hosted facilitators. Trusted contracts, asset/recipient policy, wallet signing, gas and necessary Permit2 token approval remain prerequisites; no implicit approval or on-chain action.
 
@@ -142,7 +142,27 @@ Only a single EOA using default owner permission is supported; no multisig, cust
 - Low-level `Broadcast(ctx, prepared, transaction, now)` requires prior durable journal permission. It validates bytes/signature/network/remaining lifetime, pins block zero from **the same native node**, makes one `/wallet/broadcasthex` request, then rechecks network identity. Only explicit acceptance with a successful (or omitted) code and matching original txid acknowledges this attempt, not settlement. Network-check time counts against pre-send validity.
 - `Lookup(ctx, txid)` pins genesis before/after `/wallet/gettransactionbyid` and validates txID against `SHA-256(raw_data_hex)`. `TransactionObservation.Found` is **not execution success, finality or receipt of funds**. Only an empty object means currently not found. Timeouts, ambiguous/duplicate top-level JSON keys, bad hashes and network mismatches return errors. Neither absence nor rejection authorizes reservation release, re-signing or replacement.
 
-Only simulated-node tests have exercised these HTTP requests: no real Nile broadcast yet. Node acceptance, a FullNode transaction body, an execution receipt, a solidified receipt and actual token receipt are distinct evidence layers. Successful execution/finality/token-receipt validation and malicious-node state proofs are not implemented.
+Only simulated-node tests have exercised these HTTP requests: no real Nile broadcast yet. Node acceptance, a FullNode body, execution and solidified payment events are distinct evidence layers. Neither method declares success; use the read-only checks below. No malicious-node state proofs are provided.
+
+## Solidified original-transaction and payment-event checks
+
+`executionClient.CheckSettlement(ctx, prepared, transaction, time.Now())` uses the **original prepared object and signed transaction**. No rebuilding expired authorization, broadcasting or journal/ledger writes. Expired transactions/authorizations can be checked historically; `now` must be trusted server time.
+
+The configured endpoint must expose `/walletsolidity`. Within one bounded budget, the checker:
+
+1. Pins the solidity-view genesis ID and reads a fresh solidified head.
+2. Reads the solidified body/receipt; matches original raw bytes, txid/SHA-256, single-contract execution result and receipt identity.
+3. Checks receipt block height/time, the initial solidified-head boundary and exactly one original transaction in the block. Same-height head/block IDs must agree.
+4. Requires exactly one standard-token Transfer from payer to recipient for the exact amount. Rejects partial/excess/duplicate payments, fees or other same-token transfers involving either party; no summing or treating gross flow as net receipt.
+5. Rechecks non-regressing heads, unchanged original block ID/time/transaction membership and network identity, then returns `SettlementObservation.Confirmed=true` with block ID/height.
+
+Missing solidified bodies/receipts, or a receipt just beyond the initial head, produce `Confirmed=false`, not terminal failure. Non-successful execution reports, inconsistent evidence, network failures, timeout or invalid critical fields return errors, **never Confirmed=true or permission to release reservations, re-sign or rebroadcast**.
+
+A successful check normally makes nine sequential read-only requests, without retries. Existing 15-second default total timeout (at most one minute), 1 MiB response limit, TLS/redirect restrictions and error redaction apply. Critical nested JSON rejects duplicate keys. Native integer fields reject strings/floats/overflow. Heads may lag trusted time by two minutes or lead by five seconds; total elapsed time also counts against initial-snapshot freshness. Slow nodes, long chain stalls or oversized blocks may conservatively fail; only retry read-only checks within a caller budget.
+
+**Limits:** trusted standard TRC20 tokens only; no self-transfers, fee-on-transfer, rebasing or custom event semantics. Trusted node and independently verified contract/token deployments remain assumptions. No complete chain, Merkle or malicious-node state verification; event semantics depend on the trusted token implementation. See [TRON confirmation semantics](https://developers.tron.network/docs/confirmation-semantics) and [event encoding](https://developers.tron.network/docs/event).
+
+The original `PreparedSettlement` must remain available. Never use current quotes or client-supplied arbitrary JSON to reinterpret historical bindings. Next, persist these trusted bindings and connect journal success states for recovery after restart. No generic historical prepared-object import or complete facilitator exists yet; this method and simulated tests are not deployment acceptance.
 
 ## Durable settlement journal (optional PostgreSQL)
 
@@ -155,7 +175,7 @@ Only simulated-node tests have exercised these HTTP requests: no real Nile broad
 - Prefer `Submit(ctx, id, prepared, executionClient, now)` to load original bytes, validate, CAS to unknown, broadcast only that durable snapshot and persist acceptance. Concurrent/repeated submissions get only one permission; unknown/pending never sends again. An accepted request whose ACK cannot be persisted remains unknown with the original txid. If the SQL commit itself is ambiguous, use `Get`; never assume permission remains unused.
 - `Track(ctx, id, executionClient)` performs read-only recovery using the journal txid without recreating expired authorization or a Prepare object. It never marks success or rebroadcasts based on a lookup. Bound the complete database/network operation with a caller context. No background executor, polling or queue is started.
 
-These guarantees apply only to cooperating instances sharing the same journal. Reservation does not lock on-chain nonce or funds. The store still treats transaction bytes as opaque: use the builder above to validate ID, signatures, authorization binding and expiry, then persist ID/Payload; never accept arbitrary transaction bytes from payment requests. Callers still need contract preflight, account-permission, fee-resource and risk gates. Finalized execution/token-receipt validation remains unimplemented. **No journal state permits resource delivery; this is not an exactly-once on-chain payment guarantee.**
+These guarantees apply only to cooperating instances sharing the same journal. Reservation does not lock on-chain nonce/funds. Use the trusted builder to bind ID, signatures, authorization and expiry; never accept arbitrary client transaction bytes. `CheckSettlement` is not yet integrated with durable recovery/success states. **No current journal state permits resource delivery; this is not an exactly-once on-chain payment guarantee.** Contract preflight, account-permission, fee-resource and risk gates remain necessary.
 
 Signed payloads can be broadcast: use least-privilege database access, encryption and backups. `Transaction.Payload` is excluded from JSON but must never be logged manually. Runtime accounts should lack DELETE/TRUNCATE privileges; do not automatically purge expired reservations or delete history when rolling back code. CI's temporary localhost database uses trust authentication and is **not a deployment configuration**.
 
@@ -174,7 +194,7 @@ Inputs are strict: no whitespace trimming, unknown networks, wildcards, or decim
 
 Database tests require `X402_TEST_DATABASE_URL` pointing to a dedicated PostgreSQL database with permission to create temporary schemas. Each test creates and cleans only its own random schema. Without this variable integration tests explicitly skip; this is not a passing database acceptance run. CI provisions PostgreSQL 16 and runs them.
 
-Tests cover public TronWeb vectors, tampering, uint256/fee/time boundaries, canonicality, fuzzing, simulated JSON-RPC/native nodes and actual PostgreSQL concurrency/recovery. Server tests add strict pricing/capability discovery, upfront preservation/downgrade rejection, the official client/net/http round trip, no handler execution on simulated failures/timeouts, HEAD bypass protection and no second settlement on handler failure. No live-chain acceptance is claimed. Next: solidified execution/token-receipt checks, a complete facilitator and a Nile round-trip example before gateway integration.
+Tests cover public TronWeb vectors, tampering, amount/fee/time boundaries, simulated nodes and PostgreSQL concurrency/recovery. Solidified checks add historical expiry, original-byte/block membership, execution states, changed heads/blocks, exact/duplicate/reversed events, nested duplicate JSON, network/timeouts/concurrency. Receipts/blocks are synthetic; no live-chain acceptance is claimed. Next: durable verification bindings/recovery, success states, a complete facilitator and a Nile round trip before gateway integration.
 
 ## References and status
 

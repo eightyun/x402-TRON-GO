@@ -1,4 +1,4 @@
-// Package exact 提供 TRON exact Permit2 客户端、资源服务端、授权校验及结算底层能力，不证明已结算。
+// Package exact 提供 TRON exact Permit2 客户端、资源服务端及结算组件，节点和可信部署仍属信任边界。
 package exact
 
 import (

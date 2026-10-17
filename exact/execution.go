@@ -25,7 +25,8 @@ var (
 	ErrBroadcastRejected = errors.New("节点拒绝了本次广播请求，不代表原交易最终失败")
 )
 
-// ExecutionConfig 固定一个原生 FullNode 根 URL 与独立核验的完整创世区块 ID。
+// ExecutionConfig 固定一个原生节点根 URL 与独立核验的完整创世区块 ID。
+// 广播/查找使用 wallet，固化核验另要求同一配置端点提供 walletsolidity。
 // 不自动学习 GenesisBlockID，不从付款请求获取配置；自定义 Transport 不得重试写请求。
 type ExecutionConfig struct {
 	Network                string
@@ -37,7 +38,7 @@ type ExecutionConfig struct {
 	AllowInsecureLocalHTTP bool
 }
 
-// ExecutionClient 仅提供单次原交易广播和只读查找，不构建、签名或自动重试。
+// ExecutionClient 提供单次原交易广播、只读查找和固化付款核验，不构建、签名或自动重试。
 // 跨进程幂等由持久化日志提供，不能绕过日志直接把 Broadcast 当完整结算。
 type ExecutionClient struct {
 	network   string

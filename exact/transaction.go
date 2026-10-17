@@ -70,6 +70,7 @@ type PreparedSettlement struct {
 	prefix        []byte
 	digest        [32]byte
 	authorization VerifiedAuthorization
+	payment       parsedAuthorization
 	executor      [20]byte
 	createdAt     time.Time
 	expiresAt     time.Time
@@ -131,7 +132,7 @@ func (builder *SettlementBuilder) Build(payload types.PaymentPayload, requiremen
 	prefix = binary.AppendUvarint(prefix, 2<<3|2)
 	prefix = binary.AppendUvarint(prefix, 65)
 	return &PreparedSettlement{
-		raw: raw, prefix: prefix, digest: sha256.Sum256(raw), authorization: verified,
+		raw: raw, prefix: prefix, digest: sha256.Sum256(raw), authorization: verified, payment: authorization,
 		executor: builder.executor, createdAt: createdAt, expiresAt: expiresAt,
 	}, nil
 }
