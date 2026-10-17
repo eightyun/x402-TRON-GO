@@ -1,4 +1,4 @@
-// Package postgres 提供可选结算幂等日志及受控提交，不持有密钥或证明付款成功。
+// Package postgres 提供可选结算幂等日志、受控提交及可信节点核验结果持久化，不持有密钥。
 package postgres
 
 import (
@@ -24,6 +24,12 @@ import (
 //go:embed schema.sql
 var SchemaSQL string
 
+// UpgradeConfirmationSQL 在已有日志表上显式启用成功终态，先备份并停止旧版本写入。
+// 脚本可重复执行，不删除历史；事务失败后调用方应回滚连接上的未完成事务。
+//
+//go:embed upgrade_confirmation.sql
+var UpgradeConfirmationSQL string
+
 var (
 	ErrInvalidStore     = errors.New("结算日志配置无效")
 	ErrInvalidInput     = errors.New("结算日志参数无效")
@@ -34,7 +40,7 @@ var (
 	ErrBroadcastStarted = errors.New("原交易已进入广播或待确认阶段，只允许追踪原交易")
 )
 
-// State 仅表示本地执行进度，不代表链上付款结果。
+// State 表示本地执行进度及已持久化的可信节点核验结果，不是独立链上证明。
 type State string
 
 const (
@@ -42,7 +48,15 @@ const (
 	StatePrepared         State = "prepared"
 	StateBroadcastUnknown State = "broadcast_unknown"
 	StatePending          State = "pending"
+	StateSucceeded        State = "succeeded"
 )
+
+// Confirmation 是原交易通过固化及精确付款核验后的审计定位，不是恶意节点状态证明。
+type Confirmation struct {
+	BlockNumber uint64
+	BlockID     string
+	ConfirmedAt time.Time
+}
 
 // Transaction 保存可信交易构建器提供的交易 ID 与不透明签名字节。
 // 日志只约束不可替换，不验证交易签名、内容与授权的绑定或链上有效性。
@@ -61,6 +75,7 @@ type Record struct {
 	Transaction    *Transaction
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	Confirmation   *Confirmation `json:",omitempty"`
 }
 
 // Store 可以并发使用；所有实例必须共享同一日志，禁止绕开日志另行广播。
@@ -125,7 +140,7 @@ func (store *Store) Reserve(ctx context.Context, payload types.PaymentPayload, r
 }
 
 const recordColumns = `id, network, permit2_address, payer, nonce::TEXT, digest, state,
-	transaction_id, signed_payload, created_at, updated_at`
+	transaction_id, signed_payload, created_at, updated_at, confirmed_block_number, confirmed_block_id, confirmed_at`
 
 // Get 只读取当前 Store 网络及 Permit2 域的记录，即使原授权已过期也可追踪原交易。
 func (store *Store) Get(ctx context.Context, id string) (Record, error) {
@@ -194,6 +209,7 @@ func (store *Store) BeginBroadcast(ctx context.Context, id string, digest [32]by
 
 // RecordAccepted 只记录节点已受理原 txid，不能据此交付资源或视为链上成功。
 // 拒绝、超时、查无交易均不能释放 nonce 或替换原交易；未确认时保留 unknown/pending。
+// 已成功原记录的匹配回调只返回原结果，不回退状态或改变首次确认时间。
 func (store *Store) RecordAccepted(ctx context.Context, id string, digest [32]byte, transactionID string) (Record, error) {
 	if err := store.validateID(id); err != nil {
 		return Record{}, err
@@ -203,9 +219,10 @@ func (store *Store) RecordAccepted(ctx context.Context, id string, digest [32]by
 	}
 	record, err := scanRecord(ctx, store.db.QueryRow(ctx, `
 		UPDATE x402_tron_settlements
-		SET state = 'pending', updated_at = CASE WHEN state = 'broadcast_unknown' THEN clock_timestamp() ELSE updated_at END
+		SET state = CASE WHEN state = 'succeeded' THEN state ELSE 'pending' END,
+		    updated_at = CASE WHEN state = 'broadcast_unknown' THEN clock_timestamp() ELSE updated_at END
 		WHERE id = $1 AND network = $2 AND permit2_address = $3 AND digest = $4
-		  AND transaction_id = $5 AND state IN ('broadcast_unknown', 'pending')
+		  AND transaction_id = $5 AND state IN ('broadcast_unknown', 'pending', 'succeeded')
 		RETURNING `+recordColumns, id, store.network, store.permit2, digest[:], transactionID))
 	if errors.Is(err, ErrNotFound) {
 		return Record{}, store.missingOrConflict(ctx, id)
@@ -255,9 +272,12 @@ func scanRecord(ctx context.Context, row pgx.Row) (Record, error) {
 	var record Record
 	var digest, payload []byte
 	var transactionID *string
+	var blockNumber *int64
+	var blockID *string
+	var confirmedAt *time.Time
 	err := row.Scan(&record.ID, &record.Authorization.Network, &record.Permit2Address,
 		&record.Authorization.Payer, &record.Authorization.Nonce, &digest, &record.State,
-		&transactionID, &payload, &record.CreatedAt, &record.UpdatedAt)
+		&transactionID, &payload, &record.CreatedAt, &record.UpdatedAt, &blockNumber, &blockID, &confirmedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Record{}, ErrNotFound
 	}
@@ -270,6 +290,14 @@ func scanRecord(ctx context.Context, row pgx.Row) (Record, error) {
 	copy(record.Authorization.Digest[:], digest)
 	if transactionID != nil {
 		record.Transaction = &Transaction{ID: *transactionID, Payload: payload}
+	}
+	if record.State == StateSucceeded {
+		if blockNumber == nil || *blockNumber <= 0 || blockID == nil || !validHexID(*blockID) || confirmedAt == nil || transactionID == nil {
+			return Record{}, ErrStore
+		}
+		record.Confirmation = &Confirmation{BlockNumber: uint64(*blockNumber), BlockID: *blockID, ConfirmedAt: *confirmedAt}
+	} else if blockNumber != nil || blockID != nil || confirmedAt != nil {
+		return Record{}, ErrStore
 	}
 	return record, nil
 }

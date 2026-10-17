@@ -29,6 +29,7 @@ func TestInvalidStore(t *testing.T) {
 			func() error { _, err := store.Submit(ctx, "", nil, nil, time.Now()); return err },
 			func() error { _, err := store.Track(ctx, "", nil); return err },
 			func() error { _, err := store.CheckSettlement(ctx, "", "", nil, time.Now()); return err },
+			func() error { _, err := store.ConfirmSettlement(ctx, "", "", nil, time.Now()); return err },
 		} {
 			if err := call(); !errors.Is(err, postgres.ErrInvalidStore) {
 				t.Fatalf("零值存储器错误类别：%v", err)
