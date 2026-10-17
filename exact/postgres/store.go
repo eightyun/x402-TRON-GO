@@ -70,6 +70,7 @@ type Store struct {
 	verifier *exact.OfflineVerifier
 	network  string
 	permit2  string
+	config   exact.Config
 }
 
 // New 固定一个可信网络及 Permit2 域，不连接节点、不自动执行 DDL。
@@ -86,7 +87,7 @@ func New(db *pgxpool.Pool, config exact.Config) (*Store, error) {
 	if err != nil {
 		return nil, ErrInvalidStore
 	}
-	return &Store{db: db, verifier: verifier, network: network, permit2: permit2}, nil
+	return &Store{db: db, verifier: verifier, network: network, permit2: permit2, config: config}, nil
 }
 
 // Reserve 先离线校验，再持久化占用 Permit2 的付款人 nonce。

@@ -461,4 +461,8 @@ func TestSettlementWithEphemeralExecutorSigner(t *testing.T) {
 	if err != nil || prepared.ValidateSigned(signed) != nil || signed.ID != prepared.ID() {
 		t.Fatalf("随机外部费用付款签名未通过：%v", err)
 	}
+	restored, err := exact.RestoreSettlement(fixture.Config.Authorization, fixture.Config.ExecutorAddress, signed)
+	if err != nil || restored.Authorization() != prepared.Authorization() || restored.ID() != prepared.ID() {
+		t.Fatalf("随机费用付款签名的原交易恢复失败：%v", err)
+	}
 }

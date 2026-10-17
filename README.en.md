@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Currently provides official client/resource-server mechanisms, HTTP examples, authorization/preflight, constrained transaction construction, broadcast/lookup, read-only solidified payment-event checks and an optional durable journal. **A complete facilitator, verification recovery after restart and a real testnet round trip are not complete. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
+An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Currently provides official client/resource-server mechanisms, HTTP examples, authorization/preflight, constrained transaction construction, broadcast/lookup, read-only solidified payment-event checks, verification recovery after restart and an optional durable journal. **Durable success states, a complete facilitator and a real testnet round trip are not complete. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
 
 ## Integration status
 
@@ -10,7 +10,7 @@ An independent TRON adapter SDK for x402: clients/agents, API resource servers a
 | --- | --- |
 | Client / agent | Implements official `SchemeNetworkClient`; configure signing/payment policy and use the official HTTP client for 402 retries |
 | API resource server | Implements official `SchemeNetworkServer`, Permit2 quotes and an `upfront` middleware example; requires a trusted facilitator, not just offline verification |
-| Self-hosted facilitator | Construction/broadcast/journal and read-only solidified payment checks exist; durable verification recovery, success states and official mechanism integration pending |
+| Self-hosted facilitator | Construction/broadcast/journal, read-only solidified payment checks and restart recovery exist; success states and official mechanism integration pending |
 
 Ordinary clients do not need PostgreSQL or gateway merchant/ledger modules. PostgreSQL is an optional durable storage implementation for self-hosted facilitators. Trusted contracts, asset/recipient policy, wallet signing, gas and necessary Permit2 token approval remain prerequisites; no implicit approval or on-chain action.
 
@@ -162,7 +162,9 @@ A successful check normally makes nine sequential read-only requests, without re
 
 **Limits:** trusted standard TRC20 tokens only; no self-transfers, fee-on-transfer, rebasing or custom event semantics. Trusted node and independently verified contract/token deployments remain assumptions. No complete chain, Merkle or malicious-node state verification; event semantics depend on the trusted token implementation. See [TRON confirmation semantics](https://developers.tron.network/docs/confirmation-semantics) and [event encoding](https://developers.tron.network/docs/event).
 
-The original `PreparedSettlement` must remain available. Never use current quotes or client-supplied arbitrary JSON to reinterpret historical bindings. Next, persist these trusted bindings and connect journal success states for recovery after restart. No generic historical prepared-object import or complete facilitator exists yet; this method and simulated tests are not deployment acceptance.
+After restart, `exact.RestoreSettlement(config, executorAddress, originalTransaction)` recovers a `PreparedSettlement` solely from the persisted original signed transaction. Configuration and fee-paying executor must be trusted deployment inputs. It strictly decodes this package's fixed Protobuf/ABI, checks byte-for-byte canonical re-encoding, verifies the payer's TIP-712 signature, executor's transaction signature and original txid. Authorization fields come from the original call, not an auxiliary snapshot or current quote. No `Build`, forged current time for expired authorization, validity extension, signing or broadcasting. TAPOS bytes are not a complete reference-block proof; recovery does not prove the original quote, preflight or successful payment.
+
+Compare `prepared.Authorization()` with the original trusted journal identity before calling the read-only solidified checker. Only the package's fixed single-contract, single-EOA-signature canonical encoding is accepted; other valid TRON transactions may be rejected. This is not a generic transaction importer. Durable success states and a complete facilitator remain pending; recovery and simulated tests are not deployment acceptance.
 
 ## Durable settlement journal (optional PostgreSQL)
 
@@ -174,8 +176,9 @@ The original `PreparedSettlement` must remain available. Never use current quote
 - `RecordAccepted` records node acceptance as `pending`, not success. Timeout, process exit, missing transaction or an ambiguous database commit requires `Get` and tracking the original txid, never re-signing, replacement or automatic new payment. A crash before actual submission may also leave unknown; automatic rebroadcast or reservation release is not implemented.
 - Prefer `Submit(ctx, id, prepared, executionClient, now)` to load original bytes, validate, CAS to unknown, broadcast only that durable snapshot and persist acceptance. Concurrent/repeated submissions get only one permission; unknown/pending never sends again. An accepted request whose ACK cannot be persisted remains unknown with the original txid. If the SQL commit itself is ambiguous, use `Get`; never assume permission remains unused.
 - `Track(ctx, id, executionClient)` performs read-only recovery using the journal txid without recreating expired authorization or a Prepare object. It never marks success or rebroadcasts based on a lookup. Bound the complete database/network operation with a caller context. No background executor, polling or queue is started.
+- `store.CheckSettlement(ctx, id, executorAddress, executionClient, now)` recovers the prepared binding from an unknown/pending original record, checks trusted contracts/executor and the original authorization identity, then verifies the solidified transaction and exact payment. No in-memory prepared object is needed, even after expiry. It never changes state/timestamps or broadcasts; invalid/mismatched legacy bytes fail before node reads. Bound all SQL, parsing and RPC work with a caller context.
 
-These guarantees apply only to cooperating instances sharing the same journal. Reservation does not lock on-chain nonce/funds. Use the trusted builder to bind ID, signatures, authorization and expiry; never accept arbitrary client transaction bytes. `CheckSettlement` is not yet integrated with durable recovery/success states. **No current journal state permits resource delivery; this is not an exactly-once on-chain payment guarantee.** Contract preflight, account-permission, fee-resource and risk gates remain necessary.
+These guarantees apply only to cooperating instances sharing the same journal. Reservation does not lock on-chain nonce/funds. `SaveTransaction` itself still treats bytes as opaque: use the trusted builder to bind ID, signatures, authorization and expiry; never accept arbitrary client transaction bytes. Recovery revalidates these bindings, but success states are not yet persisted. **No current journal state permits resource delivery; this is not an exactly-once on-chain payment guarantee.** Contract preflight, account-permission, fee-resource and risk gates remain necessary.
 
 Signed payloads can be broadcast: use least-privilege database access, encryption and backups. `Transaction.Payload` is excluded from JSON but must never be logged manually. Runtime accounts should lack DELETE/TRUNCATE privileges; do not automatically purge expired reservations or delete history when rolling back code. CI's temporary localhost database uses trust authentication and is **not a deployment configuration**.
 
@@ -194,7 +197,7 @@ Inputs are strict: no whitespace trimming, unknown networks, wildcards, or decim
 
 Database tests require `X402_TEST_DATABASE_URL` pointing to a dedicated PostgreSQL database with permission to create temporary schemas. Each test creates and cleans only its own random schema. Without this variable integration tests explicitly skip; this is not a passing database acceptance run. CI provisions PostgreSQL 16 and runs them.
 
-Tests cover public TronWeb vectors, tampering, amount/fee/time boundaries, simulated nodes and PostgreSQL concurrency/recovery. Solidified checks add historical expiry, original-byte/block membership, execution states, changed heads/blocks, exact/duplicate/reversed events, nested duplicate JSON, network/timeouts/concurrency. Receipts/blocks are synthetic; no live-chain acceptance is claimed. Next: durable verification bindings/recovery, success states, a complete facilitator and a Nile round trip before gateway integration.
+Tests cover public TronWeb vectors, tampering, amount/fee/time boundaries, simulated nodes and PostgreSQL concurrency/recovery. Solidified checks add historical expiry, original-byte/block membership, execution states, changed heads/blocks, exact/duplicate/reversed events, nested duplicate JSON, network/timeouts/concurrency. Recovery covers restricted decoding, both signatures, tampering and original-transaction verification through reopened database connections. Receipts/blocks are synthetic; no live-chain acceptance is claimed. Next: success states, a complete facilitator and a Nile round trip before gateway integration.
 
 ## References and status
 

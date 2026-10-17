@@ -2,7 +2,7 @@
 
 简体中文 | [English](README.en.md)
 
-面向 x402 的独立 TRON Go 适配 SDK，目标是让客户端/Agent、API 服务端和 facilitator 直接使用 TRON 支付，不必自行实现链适配，也不依赖我们的支付网关。当前已有官方客户端/资源服务端机制、HTTP 接入示例，以及授权校验、只读预检、受限交易构建、广播/查询、原交易固化到账事件核验和可选持久化日志。**完整 facilitator、重启后的核验恢复和真实测试网闭环仍未完成，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
+面向 x402 的独立 TRON Go 适配 SDK，目标是让客户端/Agent、API 服务端和 facilitator 直接使用 TRON 支付，不必自行实现链适配，也不依赖我们的支付网关。当前已有官方客户端/资源服务端机制、HTTP 接入示例，以及授权校验、只读预检、受限交易构建、广播/查询、原交易固化到账事件核验、重启后的只读核验恢复和可选持久化日志。**持久化成功终态、完整 facilitator 和真实测试网闭环仍未完成，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
 
 ## 开箱即用进度
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 客户端 / Agent | 已实现官方 `SchemeNetworkClient`；配置付款策略和签名器，由官方 HTTP 客户端处理 402 与签名重试 |
 | API 资源服务端 | 已实现官方 `SchemeNetworkServer`、Permit2 报价与 `upfront` 中间件示例；仍需可信 facilitator，不能仅验签就发货 |
-| 自建 facilitator | 已有构建/广播/日志和只读固化付款核验；待持久化核验恢复、成功终态及官方机制接口串联 |
+| 自建 facilitator | 已有构建/广播/日志、只读固化付款核验和重启恢复；待成功终态及官方机制接口串联 |
 
 普通客户端不需要 PostgreSQL，不加载支付网关的商户/账本模块。数据库只是自建 facilitator 可选的持久化实现。网络、资产与收款策略、钱包签名、Gas 和必要的 Permit2 代币授权仍是接入前置条件；不自动授权或隐式上链。
 
@@ -196,7 +196,9 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 
 **范围限制：**只适用于可信标准 TRC20 代币，不支持自转账、fee-on-transfer、rebase 或自定义事件语义。核验依赖可信节点与独立核对的合约/资产部署，不验证完整区块链、Merkle 证明或恶意节点状态。事件的链上含义须由可信代币实现保证。[TRON 官方确认语义](https://developers.tron.network/docs/confirmation-semantics)和[事件编码](https://developers.tron.network/docs/event)说明了固化视图与日志的用途。
 
-本轮仍需持有原 `PreparedSettlement`，不能把当前报价或付款请求传入的任意 JSON 当成旧交易绑定。下一步需持久化这些可信绑定并接入日志成功终态，才能支持进程重启后的最终核验。当前不导入任意历史准备对象，也未把这一结果接成完整 facilitator；不能把单个核验方法或模拟测试当作上线验收。
+重启后可调用 `exact.RestoreSettlement(config, executorAddress, originalTransaction)`，仅从持久化的原签名交易恢复 `PreparedSettlement`。`config` 和费用付款方必须来自可信部署配置。严格解码本包固定的 Protobuf/ABI，重编码逐字节比对，并重新核对付款人的 TIP-712 签名、费用付款人的交易签名和原 txid；授权参数从原调用提取，不采信额外历史 JSON 或当前报价。恢复不调用 `Build`，不伪造当前时间验证过期授权，不续期、不签名、不广播。TAPOS 字节不等于完整参考块证明；恢复本身也不证明原报价、预检或到账成功。
+
+恢复后必须将 `prepared.Authorization()` 与原日志的可信授权标识完全比较，再调用只读固化核验。仅接受本包的单一合约调用、单一 EOA 签名和固定规范编码，其他合法 TRON 交易也可能拒绝；不是通用历史交易导入器。尚未接入日志成功终态或完整 facilitator；不能把恢复对象或模拟测试当作上线验收。
 
 ## 持久化结算日志（可选 PostgreSQL）
 
@@ -208,8 +210,9 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 - 节点受理后调用 `RecordAccepted` 进入 `pending`，不是成功终态。超时、进程退出、查不到交易或数据库提交结果不明，都只能通过 `Get` 恢复并追踪原 txid，不得重签、替换或自动新建付款。广播之前崩溃也可能留下 unknown，当前没有自动重播或释放机制。
 - 推荐通过 `Submit(ctx, id, prepared, executionClient, now)` 串联提交：从数据库读原字节、校验、CAS 标记 unknown、广播原快照、记录受理。并发/重复提交只有一次写许可，已 unknown/pending 不再发送。节点已受理但 ACK 落库失败仍保留 unknown/原 txid，不回退到可发送状态。SQL 提交本身不确定时，必须重新 `Get`，不能假定未广播。
 - `Track(ctx, id, executionClient)` 重启后只用日志中的原 txid 查询，不需重建过期授权/Prepare；完全只读，不因 Found 而修改为成功或因未找到而重播。调用方应对整轮数据库和网络操作设置有界 context；本库不启动后台执行器、轮询或队列。
+- `store.CheckSettlement(ctx, id, executorAddress, executionClient, now)` 从 unknown/pending 原记录恢复准备对象，先核对可信合约、费用付款方及原授权标识，再核验固化原交易和精确到账。不需要保留内存准备对象；过期后仍可历史核验。只读，不修改状态/更新时间，不重播；无效或不匹配的旧交易字节在读取节点前拒绝。整轮 SQL、解析和 RPC 都应由调用方的有界 context 约束。
 
-这些约束只对共享同一数据库日志、遵循上述流程的实例生效。`Reserve` 不锁定链上 nonce/余额，存储层仍将交易字节视为不透明数据：应使用可信构建器完成 ID/签名/授权绑定/有效期校验，不能直接接收付款请求提供的任意交易。`CheckSettlement` 尚未与日志的重启恢复/成功终态串联，**任何现有日志状态都不能作为付费资源交付凭据**；没有“恰好一次链上付款”的保证。合约预检、账户权限、费用资源和风控闸门仍是必要条件。
+这些约束只对共享同一数据库日志、遵循上述流程的实例生效。`Reserve` 不锁定链上 nonce/余额，`SaveTransaction` 本身仍将交易字节视为不透明数据：应使用可信构建器完成 ID/签名/授权绑定/有效期校验，不能直接接收付款请求提供的任意交易。重启核验会重新验证这些绑定，但尚未持久化成功终态，**任何现有日志状态都不能作为付费资源交付凭据**；没有“恰好一次链上付款”的保证。合约预检、账户权限、费用资源和风控闸门仍是必要条件。
 
 签名数据可被广播，数据库须最小权限、加密与备份；`Transaction.Payload` 不参与 JSON 序列化，仍禁止自行打印。运行账号不应拥有 DELETE/TRUNCATE 权限，不自动清理过期占用；回滚代码也不能删除历史日志。CI 的 localhost 临时测试库使用 trust 认证，**不是部署配置**。
 
@@ -224,7 +227,7 @@ go build . ./exact ./exact/postgres ./examples/client ./examples/server
 
 PostgreSQL 集成测试要求 `X402_TEST_DATABASE_URL` 指向专用测试库，并授予创建临时 schema 的权限。每个用例使用独立随机 schema，结束后仅清理自己的 schema；未设置时明确跳过数据库测试，不能当作集成验证通过。CI 配置临时 PostgreSQL 16 并实际执行这些测试。
 
-测试覆盖地址、网络、TronWeb 编码/签名对照、授权/费用/时间边界、模拟节点和 PostgreSQL 并发恢复。固化核验覆盖历史过期交易、完整原始字节/块内归属、执行状态、头/块不一致、精确事件/重复和回转、嵌套重复 JSON、网络/超时/并发；所有回执和区块均为合成夹具，没有真实链上测试。后续补核验绑定持久化与恢复、成功终态、完整 facilitator 和 Nile 示例，再由支付网关引用版本。
+测试覆盖地址、网络、TronWeb 编码/签名对照、授权/费用/时间边界、模拟节点和 PostgreSQL 并发恢复。固化核验覆盖历史过期交易、完整原始字节/块内归属、执行状态、头/块不一致、精确事件/重复和回转、嵌套重复 JSON、网络/超时/并发；恢复测试包括受限解码、双签名、篡改和数据库重建连接后的原交易核验。所有回执和区块均为合成夹具，没有真实链上测试。后续补成功终态、完整 facilitator 和 Nile 示例，再由支付网关引用版本。
 
 ## 参考与发布状态
 

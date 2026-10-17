@@ -78,3 +78,36 @@ func (store *Store) Track(ctx context.Context, id string, client *exact.Executio
 	}
 	return client.Lookup(ctx, record.Transaction.ID)
 }
+
+// CheckSettlement 从持久化原交易恢复可信绑定，再只读核验原交易固化与精确到账。
+// executorAddress 来自可信部署配置；无须保留原准备对象或重新验证已过期报价。
+// 不改变日志状态、广播许可或占用；Confirmed 不是持久化成功终态。
+// 调用方须为整轮 SQL/解析/RPC 设置有界 context，now 来自可信服务端。
+func (store *Store) CheckSettlement(ctx context.Context, id, executorAddress string, client *exact.ExecutionClient, now time.Time) (exact.SettlementObservation, error) {
+	started := time.Now()
+	if err := store.validateID(id); err != nil {
+		return exact.SettlementObservation{}, err
+	}
+	if client == nil || client.Network() == "" {
+		return exact.SettlementObservation{}, exact.ErrExecutionConfig
+	}
+	if client.Network() != store.network {
+		return exact.SettlementObservation{}, exact.ErrChainMismatch
+	}
+	record, err := store.Get(ctx, id)
+	if err != nil {
+		return exact.SettlementObservation{}, err
+	}
+	if (record.State != StateBroadcastUnknown && record.State != StatePending) || record.Transaction == nil {
+		return exact.SettlementObservation{}, ErrNotSubmitted
+	}
+	transaction := exact.SettlementTransaction{ID: record.Transaction.ID, Payload: record.Transaction.Payload}
+	prepared, err := exact.RestoreSettlement(store.config, executorAddress, transaction)
+	if err != nil {
+		return exact.SettlementObservation{}, err
+	}
+	if prepared.Authorization() != record.Authorization {
+		return exact.SettlementObservation{}, ErrConflict
+	}
+	return client.CheckSettlement(ctx, prepared, transaction, now.Add(time.Since(started)))
+}

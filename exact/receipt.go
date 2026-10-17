@@ -29,7 +29,7 @@ type SettlementObservation struct {
 }
 
 // CheckSettlement 仅从 walletsolidity 核验原交易，不广播、不改日志、不释放占用。
-// now 来自可信服务端；历史交易可过期，但必须保留原准备对象，不能用当前报价重建它。
+// now 来自可信服务端；历史交易可过期，准备对象须保留或从可信绑定的原签名交易恢复，不能用当前报价重建。
 // 缺少固化主体或回执返回 Confirmed=false；错误和未确认结果都不允许重新付款或交付资源。
 func (client *ExecutionClient) CheckSettlement(ctx context.Context, prepared *PreparedSettlement, transaction SettlementTransaction, now time.Time) (SettlementObservation, error) {
 	if !client.valid() {
