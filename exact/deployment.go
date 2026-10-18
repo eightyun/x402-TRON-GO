@@ -43,10 +43,7 @@ func (verifier *PreflightVerifier) CheckDeployment(ctx context.Context, assetAdd
 		return DeploymentResult{}, err
 	}
 	started := time.Now()
-	if err := verifier.checkChain(ctx); err != nil {
-		return DeploymentResult{}, err
-	}
-	before, err := verifier.rpc.head(ctx)
+	before, err := verifier.checkHead(ctx)
 	if err != nil {
 		return DeploymentResult{}, err
 	}
@@ -57,10 +54,7 @@ func (verifier *PreflightVerifier) CheckDeployment(ctx context.Context, assetAdd
 	if err := verifier.checkContracts(ctx, asset, verifier.offline.proxy); err != nil {
 		return DeploymentResult{}, err
 	}
-	if err := verifier.checkChain(ctx); err != nil {
-		return DeploymentResult{}, err
-	}
-	after, err := verifier.rpc.head(ctx)
+	after, err := verifier.checkHead(ctx)
 	if err != nil {
 		return DeploymentResult{}, err
 	}

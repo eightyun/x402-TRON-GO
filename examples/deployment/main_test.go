@@ -152,12 +152,13 @@ func TestRunFailureAndOutputErrors(t *testing.T) {
 	fail.Store(true)
 	var output bytes.Buffer
 	err := run(context.Background(), config, asset, &output)
-	if !errors.Is(err, exact.ErrNodeRead) || strings.Contains(err.Error(), "synthetic-sensitive") || output.Len() != 0 || calls.Load() != 1 {
+	failedReads := calls.Load()
+	if !errors.Is(err, exact.ErrNodeRead) || strings.Contains(err.Error(), "synthetic-sensitive") || output.Len() != 0 || failedReads != 2 {
 		t.Fatal("节点错误被忽略或泄漏")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := run(ctx, config, asset, &output); !errors.Is(err, context.Canceled) || calls.Load() != 1 {
+	if err := run(ctx, config, asset, &output); !errors.Is(err, context.Canceled) || calls.Load() != failedReads {
 		t.Fatal("取消后仍访问节点")
 	}
 	fail.Store(false)

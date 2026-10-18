@@ -19,12 +19,16 @@ import (
 	"time"
 )
 
-const maxRPCResponseBytes = 1 << 20
+const (
+	maxRPCResponseBytes       = 1 << 20
+	maxConcurrentPreflightRPC = 6
+)
 
 type readRPC struct {
 	endpoint string
 	apiKey   string
 	client   *http.Client
+	slots    chan struct{}
 }
 
 func newReadRPC(config PreflightConfig) (*readRPC, error) {
@@ -47,7 +51,7 @@ func newReadRPC(config PreflightConfig) (*readRPC, error) {
 		}
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &readRPC{endpoint: endpoint.String(), apiKey: config.APIKey, client: &client}, nil
+	return &readRPC{endpoint: endpoint.String(), apiKey: config.APIKey, client: &client, slots: make(chan struct{}, maxConcurrentPreflightRPC)}, nil
 }
 
 func (rpc *readRPC) call(ctx context.Context, method string, params []interface{}, result interface{}) (err error) {
@@ -56,6 +60,16 @@ func (rpc *readRPC) call(ctx context.Context, method string, params []interface{
 			err = fmt.Errorf("调用只读 RPC %s: %w", method, err)
 		}
 	}()
+	// 同一客户端的所有预检共用额度，排队及响应读取均计入调用方原有总预算。
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case rpc.slots <- struct{}{}:
+	}
+	defer func() { <-rpc.slots }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// 方法仅由本包的固定只读调用点指定，不导出任意 RPC 转发入口。
 	body, err := json.Marshal(struct {
 		JSONRPC string        `json:"jsonrpc"`

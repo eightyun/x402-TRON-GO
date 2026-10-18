@@ -187,7 +187,9 @@ if err != nil {
 
 `CheckWithSimulation(ctx, payload, requirements, executorAddress, now)` 在上述 nonce 检查后、后置链头/时效检查前，额外通过 `eth_call` 模拟完整 `settle`。费用付款方必须由部署方固定，不能取自付款请求；调用的代理、授权、收款人、签名和 ABI 编码与原生交易构建器一致，附带 TRX 为零。固定 ABI 无返回值，只有精确的 `"0x"` 被接受；节点不支持、revert、读取失败或异常返回都会拒绝，不静默降级。响应拒绝重复键、错误信封和尾随 JSON，错误不回显节点原文。
 
-原 `Check` 保持 13 次串行读取；带完整模拟的一轮为 14 次，共用默认 15 秒、上限 1 分钟的总预算，不自动重试；最新链头最多落后服务端 60 秒或超前 5 秒。较慢节点上可能因链头更新而被保守拒绝，调用方可在自身预算内重新预检，但不能据此自动发起新交易。
+原 `Check` 保持 13 次读取；带完整模拟的一轮为 14 次，共用默认 15 秒、上限 1 分钟的总预算，不自动重试。独立只读查询分组并发：链 ID 与链头、六项合约检查、余额/allowance/nonce，完整模拟仍在前置检查全部通过后单独执行。每个预检器共用最多6个在途 JSON-RPC 额度，排队也计入预算，组内任务全部退出后才返回；取消/超时保留 context 语义，其他并发错误按原逻辑顺序选择，不因响应快慢改变分类。失败组中的其他只读请求可能已发送，但不会进入后续模拟/签名/广播。
+
+自定义 `HTTPClient`/Transport 须支持并发并遵守 context 取消。该上限不是跨多个预检器的全局限流或累计费用预算，突发请求仍可能触发节点429并被拒绝；未引入 JSON-RPC batch、Multicall 合约依赖、缓存或失败时串行降级。最新链头仍最多落后服务端60秒或超前5秒，前后链头仍须一致；较慢节点上仍可能被保守拒绝，调用方可在自身预算内重新预检，但不能据此自动发起新交易。
 
 自建 facilitator 的 `/verify` 和新付款 `/settle` **强制完整模拟**，使用配置的 `ExecutorAddress`；模拟失败返回 `settlement_simulation_failed`，不会新增占用、签名或广播。该行为比原状态预检严格，不支持完整调用的节点不能接纳新付款；已经广播/待确认/成功的历史记录仍只恢复原交易，不因已消费 nonce 或模拟不可用而再次付款。模拟成功不代表账户权限、Energy/Bandwidth 或费用资源充分，也不预留资金、不证明实发或固化到账。
 
@@ -197,7 +199,7 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 
 ## 无钱包部署检查
 
-同一 `PreflightVerifier` 提供 `CheckDeployment(ctx, assetAddress, now)`：无需付款人、签名或有效报价，即可检查配置的链 ID、鲜活链头、Permit2/代理代码哈希、代币非空代码、`PERMIT2()`、两字段 `WITNESS_TYPEHASH()` 和 `DOMAIN_SEPARATOR()`，最后再次核对链/头/新鲜度。正常10次串行只读请求，使用原预检总预算，不自动重试。返回 `DeploymentResult`，原付款预检和结算逻辑不变。
+同一 `PreflightVerifier` 提供 `CheckDeployment(ctx, assetAddress, now)`：无需付款人、签名或有效报价，即可检查配置的链 ID、鲜活链头、Permit2/代理代码哈希、代币非空代码、`PERMIT2()`、两字段 `WITNESS_TYPEHASH()` 和 `DOMAIN_SEPARATOR()`，最后再次核对链/头/新鲜度。正常仍为10次只读请求，按“边界2读→合约6读→边界2读”分组并发，使用原预检总预算/共享6请求上限，不自动重试。返回 `DeploymentResult`，原付款预检和结算逻辑不变。
 
 可运行 [部署检查示例](examples/deployment/main.go)：显式设置下列环境变量，再执行 `go run ./examples/deployment`。
 

@@ -196,6 +196,14 @@ func selector(query nodeRequest) string {
 	return call["data"][:10]
 }
 
+func codeAddress(query nodeRequest) string {
+	var address string
+	if query.Method == "eth_getCode" && len(query.Params) > 0 {
+		_ = json.Unmarshal(query.Params[0], &address)
+	}
+	return address
+}
+
 func TestReadOnlyPreflight(t *testing.T) {
 	t.Parallel()
 	input := loadVector(t)
@@ -256,18 +264,18 @@ func TestPreflightRejectsChainAndAccountFailures(t *testing.T) {
 				r.Result.(map[string]string)["timestamp"] = "0x7fffffffffffffff"
 			}
 		}, exact.ErrStaleHead},
-		{"wrong_permit_code", func(q nodeRequest, n int, r *nodeReply) {
-			if q.Method == "eth_getCode" && n == 1 {
+		{"wrong_permit_code", func(q nodeRequest, _ int, r *nodeReply) {
+			if codeAddress(q) == permitWire {
 				r.Result = "0x6003"
 			}
 		}, exact.ErrContractMismatch},
-		{"wrong_proxy_code", func(q nodeRequest, n int, r *nodeReply) {
-			if q.Method == "eth_getCode" && n == 2 {
+		{"wrong_proxy_code", func(q nodeRequest, _ int, r *nodeReply) {
+			if codeAddress(q) == "0x3a2c916ce2b40f0ffc06cc80c0f72c0fc25be105" {
 				r.Result = "0x6003"
 			}
 		}, exact.ErrContractMismatch},
-		{"missing_token_code", func(q nodeRequest, n int, r *nodeReply) {
-			if q.Method == "eth_getCode" && n == 3 {
+		{"missing_token_code", func(q nodeRequest, _ int, r *nodeReply) {
+			if codeAddress(q) == "0xeca9bc828a3005b9a3b909f2cc5c2a54794de05f" {
 				r.Result = "0x"
 			}
 		}, exact.ErrContractMismatch},
@@ -493,9 +501,10 @@ func TestPreflightCancellationAndTimeout(t *testing.T) {
 	for _, timeout := range []bool{false, true} {
 		t.Run(strconv.FormatBool(timeout), func(t *testing.T) {
 			entered := make(chan struct{})
+			var once sync.Once
 			server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 				_, _ = io.Copy(io.Discard, r.Body)
-				close(entered)
+				once.Do(func() { close(entered) })
 				<-r.Context().Done()
 			}))
 			defer server.Close()

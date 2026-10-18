@@ -73,8 +73,8 @@ func TestDeploymentRejectsNodeAndContractFailures(t *testing.T) {
 				reply.Result = "0x6003600055"
 			}
 		}, exact.ErrContractMismatch},
-		{"asset_has_no_code", func(query nodeRequest, n int, reply *nodeReply) {
-			if query.Method == "eth_getCode" && n == 3 {
+		{"asset_has_no_code", func(query nodeRequest, _ int, reply *nodeReply) {
+			if codeAddress(query) == "0xeca9bc828a3005b9a3b909f2cc5c2a54794de05f" {
 				reply.Result = "0x"
 			}
 		}, exact.ErrContractMismatch},

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"sync"
 	"time"
 
 	tron "github.com/eightyun/x402-tron-go"
@@ -116,10 +117,7 @@ func (verifier *PreflightVerifier) check(ctx context.Context, payload types.Paym
 	if err != nil {
 		return PreflightResult{}, err
 	}
-	if err := verifier.checkChain(ctx); err != nil {
-		return PreflightResult{}, err
-	}
-	before, err := verifier.rpc.head(ctx)
+	before, err := verifier.checkHead(ctx)
 	if err != nil {
 		return PreflightResult{}, err
 	}
@@ -137,10 +135,7 @@ func (verifier *PreflightVerifier) check(ctx context.Context, payload types.Paym
 	if err := verifier.checkContracts(ctx, asset, payer); err != nil {
 		return PreflightResult{}, err
 	}
-	if err := verifier.checkFunds(ctx, asset, payer, amount); err != nil {
-		return PreflightResult{}, err
-	}
-	if err := verifier.checkNonce(ctx, payer, verified.Nonce); err != nil {
+	if err := verifier.checkPaymentState(ctx, asset, payer, amount, verified.Nonce); err != nil {
 		return PreflightResult{}, err
 	}
 	if executor != nil {
@@ -161,10 +156,7 @@ func (verifier *PreflightVerifier) check(ctx context.Context, payload types.Paym
 			return PreflightResult{}, err
 		}
 	}
-	if err := verifier.checkChain(ctx); err != nil {
-		return PreflightResult{}, err
-	}
-	after, err := verifier.rpc.head(ctx)
+	after, err := verifier.checkHead(ctx)
 	if err != nil {
 		return PreflightResult{}, err
 	}
@@ -203,7 +195,40 @@ func (verifier *PreflightVerifier) checkChain(ctx context.Context) error {
 	return nil
 }
 
+// 每组只有固定、独立的只读检查；等待全部退出，按原逻辑顺序选择错误，而非响应到达顺序。
+func parallelChecks(ctx context.Context, checks ...func(context.Context) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	errorsByCheck := make([]error, len(checks))
+	var workers sync.WaitGroup
+	for index, check := range checks {
+		workers.Go(func() { errorsByCheck[index] = check(ctx) })
+	}
+	workers.Wait()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, err := range errorsByCheck {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (verifier *PreflightVerifier) checkHead(ctx context.Context) (observedHead, error) {
+	var head observedHead
+	err := parallelChecks(ctx, verifier.checkChain, func(ctx context.Context) error {
+		var err error
+		head, err = verifier.rpc.head(ctx)
+		return err
+	})
+	return head, err
+}
+
 func (verifier *PreflightVerifier) checkContracts(ctx context.Context, asset, payer [20]byte) error {
+	checks := make([]func(context.Context) error, 0, 6)
 	for _, contract := range []struct {
 		address [20]byte
 		hash    [32]byte
@@ -212,54 +237,60 @@ func (verifier *PreflightVerifier) checkContracts(ctx context.Context, asset, pa
 		{verifier.offline.proxy, verifier.proxyCodeHash},
 		{asset, [32]byte{}},
 	} {
-		code, err := verifier.rpc.code(ctx, contract.address)
+		checks = append(checks, func(ctx context.Context) error {
+			code, err := verifier.rpc.code(ctx, contract.address)
+			if err != nil {
+				return err
+			}
+			if len(code) == 0 || (contract.hash != [32]byte{} && keccak(code) != contract.hash) {
+				return ErrContractMismatch
+			}
+			return nil
+		})
+	}
+	for _, getter := range []struct {
+		address [20]byte
+		method  string
+		want    [32]byte
+	}{
+		{verifier.offline.proxy, "PERMIT2()", addressWord(verifier.permit2)},
+		{verifier.offline.proxy, "WITNESS_TYPEHASH()", keccak([]byte("Witness(address to,uint256 validAfter)"))},
+		{verifier.permit2, "DOMAIN_SEPARATOR()", verifier.offline.domain},
+	} {
+		checks = append(checks, func(ctx context.Context) error {
+			value, err := verifier.rpc.contractWord(ctx, payer, getter.address, getter.method)
+			if err != nil {
+				return err
+			}
+			if value != getter.want {
+				return ErrContractMismatch
+			}
+			return nil
+		})
+	}
+	return parallelChecks(ctx, checks...)
+}
+
+func (verifier *PreflightVerifier) checkPaymentState(ctx context.Context, asset, payer [20]byte, amount [32]byte, nonce string) error {
+	return parallelChecks(ctx, func(ctx context.Context) error {
+		balance, err := verifier.rpc.contractWord(ctx, payer, asset, "balanceOf(address)", addressWord(payer))
 		if err != nil {
 			return err
 		}
-		if len(code) == 0 || (contract.hash != [32]byte{} && keccak(code) != contract.hash) {
-			return ErrContractMismatch
+		if new(big.Int).SetBytes(balance[:]).Cmp(new(big.Int).SetBytes(amount[:])) < 0 {
+			return ErrInsufficientBalance
 		}
-	}
-	permit2, err := verifier.rpc.contractWord(ctx, payer, verifier.offline.proxy, "PERMIT2()")
-	if err != nil {
-		return err
-	}
-	if permit2 != addressWord(verifier.permit2) {
-		return ErrContractMismatch
-	}
-	witness, err := verifier.rpc.contractWord(ctx, payer, verifier.offline.proxy, "WITNESS_TYPEHASH()")
-	if err != nil {
-		return err
-	}
-	if witness != keccak([]byte("Witness(address to,uint256 validAfter)")) {
-		return ErrContractMismatch
-	}
-	domain, err := verifier.rpc.contractWord(ctx, payer, verifier.permit2, "DOMAIN_SEPARATOR()")
-	if err != nil {
-		return err
-	}
-	if domain != verifier.offline.domain {
-		return ErrContractMismatch
-	}
-	return nil
-}
-
-func (verifier *PreflightVerifier) checkFunds(ctx context.Context, asset, payer [20]byte, amount [32]byte) error {
-	balance, err := verifier.rpc.contractWord(ctx, payer, asset, "balanceOf(address)", addressWord(payer))
-	if err != nil {
-		return err
-	}
-	if new(big.Int).SetBytes(balance[:]).Cmp(new(big.Int).SetBytes(amount[:])) < 0 {
-		return ErrInsufficientBalance
-	}
-	allowance, err := verifier.rpc.contractWord(ctx, payer, asset, "allowance(address,address)", addressWord(payer), addressWord(verifier.permit2))
-	if err != nil {
-		return err
-	}
-	if new(big.Int).SetBytes(allowance[:]).Cmp(new(big.Int).SetBytes(amount[:])) < 0 {
-		return ErrInsufficientAllowance
-	}
-	return nil
+		return nil
+	}, func(ctx context.Context) error {
+		allowance, err := verifier.rpc.contractWord(ctx, payer, asset, "allowance(address,address)", addressWord(payer), addressWord(verifier.permit2))
+		if err != nil {
+			return err
+		}
+		if new(big.Int).SetBytes(allowance[:]).Cmp(new(big.Int).SetBytes(amount[:])) < 0 {
+			return ErrInsufficientAllowance
+		}
+		return nil
+	}, func(ctx context.Context) error { return verifier.checkNonce(ctx, payer, nonce) })
 }
 
 func (verifier *PreflightVerifier) checkNonce(ctx context.Context, payer [20]byte, nonceText string) error {
