@@ -103,7 +103,15 @@ func licenseFiles(module moduleLicense) ([]entry, error) {
 	}
 	var items []entry
 	found := false
-	for _, name := range []string{"LICENSE", "LICENSE.txt", "LICENSE.md", "COPYING", "NOTICE", "NOTICE.txt"} {
+	names, err := os.ReadDir(module.Dir)
+	if err != nil {
+		return nil, errPackage
+	}
+	for _, file := range names {
+		name := file.Name()
+		if !regexp.MustCompile(`(?i)^(LICENSE|COPYING|NOTICE)([._-].*)?$`).MatchString(name) {
+			continue
+		}
 		filename := filepath.Join(module.Dir, name)
 		info, err := os.Lstat(filename)
 		if errors.Is(err, os.ErrNotExist) {
@@ -117,7 +125,7 @@ func licenseFiles(module moduleLicense) ([]entry, error) {
 			return nil, errPackage
 		}
 		items = append(items, entry{"licenses/" + module.Path + "@" + module.Version + "/" + name, data, 0644})
-		if strings.HasPrefix(name, "LICENSE") || name == "COPYING" {
+		if strings.HasPrefix(strings.ToUpper(name), "LICENSE") || strings.HasPrefix(strings.ToUpper(name), "COPYING") {
 			found = true
 		}
 	}

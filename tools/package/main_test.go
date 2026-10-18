@@ -69,6 +69,17 @@ func TestBuildEnvironmentOverridesUnsafeGoSettings(t *testing.T) {
 	}
 }
 
+func TestLicenseFilesKeepUpstreamApacheFilename(t *testing.T) {
+	dir := t.TempDir()
+	if os.WriteFile(filepath.Join(dir, "LICENSE-APACHE-2.0.txt"), []byte("upstream-license-text"), 0600) != nil {
+		t.Fatal("写夹具失败")
+	}
+	files, err := licenseFiles(moduleLicense{Path: "example.invalid/sdk", Version: "v1.0.0", Dir: dir})
+	if err != nil || len(files) != 1 || !strings.HasSuffix(files[0].name, "/LICENSE-APACHE-2.0.txt") {
+		t.Fatal("上游非通用文件名的完整许可证未收集", err)
+	}
+}
+
 func TestArchivesAreDeterministicAndContainOnlyDeclaredFiles(t *testing.T) {
 	dir := t.TempDir()
 	stamp := time.Unix(1700000000, 0)
