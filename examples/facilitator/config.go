@@ -1,20 +1,18 @@
 package main
 
 import (
-	"encoding/hex"
 	"errors"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	tron "github.com/eightyun/x402-tron-go"
 	"github.com/eightyun/x402-tron-go/exact"
 	"github.com/eightyun/x402-tron-go/exact/postgres"
+	"github.com/eightyun/x402-tron-go/internal/examplekeys"
 )
 
 var errConfiguration = errors.New("facilitator 示例配置或部署前置条件无效")
@@ -83,39 +81,7 @@ func loadConfig() (configuration, error) {
 }
 
 func loadSigner(path string) (*exact.EOASigner, error) {
-	if !filepath.IsAbs(path) {
-		return nil, errConfiguration
-	}
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, errConfiguration
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || (info.Mode().Perm() != 0400 && info.Mode().Perm() != 0600) || (info.Size() != 64 && info.Size() != 65) {
-		return nil, errConfiguration
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Uid != uint32(os.Geteuid()) {
-		return nil, errConfiguration
-	}
-	data, err := io.ReadAll(io.LimitReader(file, 66))
-	defer clear(data)
-	if err != nil {
-		return nil, errConfiguration
-	}
-	if len(data) == 65 && data[64] == '\n' {
-		data = data[:64]
-	}
-	var key [32]byte
-	defer clear(key[:])
-	if len(data) != 64 {
-		return nil, errConfiguration
-	}
-	if _, err := hex.Decode(key[:], data); err != nil {
-		return nil, errConfiguration
-	}
-	signer, err := exact.NewEOASigner(key[:])
+	signer, err := examplekeys.Load(path)
 	if err != nil {
 		return nil, errConfiguration
 	}

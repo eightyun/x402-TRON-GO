@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Provides official mechanisms for all three roles, a runnable facilitator HTTP example, authorization/preflight, transaction construction/broadcast, solidified exact-payment checks and durable recovery. **One real Nile HTTP payment and cross-process recovery of its succeeded record have passed; this remains an unaudited testnet development version. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
+An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Provides official mechanisms for all three roles, a runnable facilitator HTTP example, authorization/preflight, transaction construction/broadcast, solidified exact-payment checks and durable recovery. **Real Nile HTTP payments, terminal-success recovery and cross-process recovery after a pending-process crash have passed; this remains an unaudited testnet development version. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
 
 ## Integration status
 
@@ -91,7 +91,7 @@ Remote requests have a 200-second budget covering the mechanism's maximum 180 se
 
 The self-hosted example below requires independently provisioned/verified contracts and nodes; no public facilitator address is assumed. Automated HTTP integration tests use synthetic chain state/receipts. The separate single-payment Nile exercise below **does not establish clean-room deployment of the executable examples or production acceptance**.
 
-### Single-payment Nile validation (2026-10-18)
+### Nile live-chain validation (2026-10-18)
 
 Core revision `39b83a63fab27715306cf6fb273a9dd7184195e5`, Go 1.26.5 and official Go SDK v2.28.0 used the source-reproduced Permit2/proxy below, Nile test USDT `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf`, separate payer/executor/recipient addresses and dedicated PostgreSQL. A one-off local integration program used public SDK APIs and official HTTP middleware with two loopback TLS services and real nodes/receipts; core code and admission checks were unchanged.
 
@@ -99,9 +99,29 @@ Core revision `39b83a63fab27715306cf6fb273a9dd7184195e5`, Go 1.26.5 and official
 - Settlement [135dfb80…23efe5](https://nile.tronscan.org/#/transaction/135dfb80322290839444d93864f8190ae16cb0aadb1b9d9621110f96b823efe5), solidified block `71933724`, with one exact Transfer and matching balance changes. Approval cost 0 and settlement cost 7.237 test TRX; these are observed fees, not future estimates.
 - After normal process exit, a new process replayed the identical authorization and returned the same txid from the existing `succeeded` record. Additional authorization signatures, transaction signatures and broadcasts were all zero; original signed bytes, balances and fees were unchanged. **This is terminal-success recovery across processes, not a forced crash while pending.**
 
-This did not validate clean-room executable-example deployment, Shasta/Mainnet, live end-to-end upstream-SDK payments, long-running stability or independent security. Private keys, original spendable authorizations and local operational materials are not published; no copy-ready production-funds configuration is supplied. Real pending-interruption recovery, clean-room integration and prerelease packaging remain pending.
+A second real payment verified pending-interruption recovery: settlement [3a339895…18873a](https://nile.tronscan.org/#/transaction/3a339895a1c7f3e66370e33e8bc71c729ff287c826dcf82129fa6ffd7318873a) was journaled as `pending`, absent from both solidified body/receipt endpoints, and not delivered when its executor process was SIGSTOP/SIGKILL-terminated and reaped. A new process loaded no private keys and reused the original header, database and 603 signed bytes, delivering only after solidification in block `71934525`. Additional authorization signatures, transaction signatures and broadcasts were zero. The first record stayed unchanged; payer/recipient changed by exactly 0.001 test USDT. The second fee was 5.737 test TRX, totaling 12.974 for both payments.
+
+These exercises used separate integration programs, not clean-room deployment of the complete executable examples. Shasta/Mainnet, live end-to-end upstream-SDK payments, long-running stability and independent security remain unvalidated. Private keys, original spendable authorizations and local operational materials are not published; no copy-ready production-funds configuration is supplied. Clean-room integration and prerelease packaging remain pending.
 
 ## Self-hosted facilitator HTTP example
+
+### Real payment client and identical-request recovery
+
+The [payer example](examples/payer/main.go) is an explicitly enabled Linux/macOS testnet client, separate from the offline-handshake-only `examples/client`. Use [.env.example](.env.example) to configure trusted network/Permit2/proxy, token/recipient, `X402_MAX_AMOUNT_ATOMIC`, `X402_PAYER_ADDRESS`, `X402_PAYER_KEY_FILE` and resource URL. The template is not loaded automatically. Never commit actual credentials, keys or authorizations.
+
+Pre-create a service-user-owned **0700 state directory under privately controlled parents**, set its absolute path as `X402_PAYMENT_STATE_DIR`, then explicitly set `X402_ENABLE_TESTNET_PAYMENTS=true`:
+
+```bash
+go run ./examples/payer pay
+# After disconnect, failure, pending or interruption, reuse the same directory/config; never pay again.
+go run ./examples/payer recover
+```
+
+Only GET to the fixed URL on Nile/Shasta is supported. HTTPS is the default. Plaintext requires explicit `X402_ALLOW_INSECURE_LOCAL_RESOURCE_HTTP=true` and a literal loopback IP. Mainnet, URL credentials/query/fragment and redirects are rejected. Keys must be service-user-owned 0400/0600 regular files. Recovery never loads the key.
+
+`pay` exclusively persists an intent before the official client signs one authorization from the 402 quote, then saves the original `PAYMENT-SIGNATURE` before transmission. Existing intents reject another pay. `recover` checks the original configuration/signature binding and sends that same header without generating a nonce; it can complete a previously unsubmitted authorization and **is not a read-only lookup**. Private files retain each attempt and successful resource content; stdout contains restricted metadata only. HTTP success must match network, payer, amount and a nonempty txid, but relies on the trusted service rather than independent chain proof.
+
+Never clear the state directory to retry, or replace an unknown payment using another directory. An intent without a saved header requires manual investigation of whether authorization was signed/sent, not automatic re-signing. The example does not fund wallets, approve tokens, automatically retry, enforce cumulative gas budgets or deduplicate business fulfillment. Replayed resource GETs may execute the handler again.
 
 `postgres.NewHTTPHandler(mechanism, postgres.HTTPConfig{BearerToken: token, MaxConcurrent: 8})` registers the official SDK core and exposes `GET /supported`, `POST /verify`, `POST /settle`. All endpoints require a 32–256-byte non-whitespace ASCII Bearer token. JSON is limited to 64 KiB; duplicate/ambiguous keys, unknown envelope fields, trailing values and non-v2 requests are rejected. Concurrent verification/settlement defaults to 8 (configurable 1–64). Excess requests receive 503 without signing/broadcasting. This is a per-process concurrency limit, not an aggregate expense budget.
 
@@ -339,7 +359,7 @@ Versions and complete tarball integrity are locked. During tests Node network ac
 
 Upstream 1.2.0 actually uses `tron:0xcd8690dc` / `tron:0x94a9059e`. Tests register the same keys as its real quotes, without silently rewriting them to decimal or patching SDK constants. This project's default remains canonical decimal. Newer source-level alias support does not imply support in that published package. A separate test records rejection of decimal quotes; no all-version/default-HTTP compatibility is claimed. Align quote/discovery/registration network profiles and verify the exact counterpart version before integration.
 
-Tests cover public TronWeb vectors, tampering, amount/fee/time boundaries, simulated nodes and PostgreSQL concurrency/recovery. Solidified checks cover original bytes/block membership, execution, changed heads/blocks, exact/duplicate/reversed events, malformed JSON and network/timeouts. Recovery/persistence cover upgrades/rollback, constraints, conflicting evidence, delayed callbacks, SQL failure and lost responses after actual commit. Facilitator tests cover official SDK/HTTP authentication, input/capacity/error redaction, dynamic ephemeral signatures, 16 concurrent calls with single signing/broadcast, expired/consumed-nonce recovery, pending/node failures and never broadcasting uncommitted bytes. Automated receipts/blocks are synthetic; the single-payment live exercise is recorded separately above. Next: real pending-interruption recovery and clean-room integration, then prerelease packaging before gateway integration.
+Tests cover public TronWeb vectors, tampering, amount/fee/time boundaries, simulated nodes and PostgreSQL concurrency/recovery. Solidified checks cover original bytes/block membership, execution, changed heads/blocks, exact/duplicate/reversed events, malformed JSON and network/timeouts. Recovery/persistence cover upgrades/rollback, constraints, conflicting evidence, delayed callbacks, SQL failure and lost responses after actual commit. Facilitator tests cover official SDK/HTTP authentication, input/capacity/error redaction, dynamic ephemeral signatures, 16 concurrent calls with single signing/broadcast, expired/consumed-nonce recovery, pending/node failures and never broadcasting uncommitted bytes. Automated receipts/blocks are synthetic; live exercises are recorded separately above. Linux CI also builds and launches three executable examples with a random PostgreSQL schema and self-signed TLS synthetic node. macOS system roots do not read SSL_CERT_FILE, so that synthetic-process case explicitly skips there without bypassing TLS. Next: standalone live-example integration and prerelease packaging before gateway integration.
 
 ## References and status
 
