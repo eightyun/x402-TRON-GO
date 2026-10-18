@@ -185,7 +185,11 @@ if err != nil {
 
 余额或 allowance 不足、nonce 已使用、代码/绑定不符、头变化或任何读取失败都会拒绝。成功返回的 `PreflightResult` 只有授权与观测头，**不是结算证明，也不会锁定余额或 nonce**。不提供恶意节点的状态证明；配置节点和合约代码哈希仍是信任边界。
 
-当前一轮正常预检执行 13 次串行读取。总预算默认 15 秒、上限 1 分钟，不自动重试；最新链头最多落后服务端 60 秒或超前 5 秒。较慢节点上可能因链头更新而被保守拒绝，调用方可在自身预算内重新预检，但不能据此自动发起新交易。
+`CheckWithSimulation(ctx, payload, requirements, executorAddress, now)` 在上述 nonce 检查后、后置链头/时效检查前，额外通过 `eth_call` 模拟完整 `settle`。费用付款方必须由部署方固定，不能取自付款请求；调用的代理、授权、收款人、签名和 ABI 编码与原生交易构建器一致，附带 TRX 为零。固定 ABI 无返回值，只有精确的 `"0x"` 被接受；节点不支持、revert、读取失败或异常返回都会拒绝，不静默降级。响应拒绝重复键、错误信封和尾随 JSON，错误不回显节点原文。
+
+原 `Check` 保持 13 次串行读取；带完整模拟的一轮为 14 次，共用默认 15 秒、上限 1 分钟的总预算，不自动重试；最新链头最多落后服务端 60 秒或超前 5 秒。较慢节点上可能因链头更新而被保守拒绝，调用方可在自身预算内重新预检，但不能据此自动发起新交易。
+
+自建 facilitator 的 `/verify` 和新付款 `/settle` **强制完整模拟**，使用配置的 `ExecutorAddress`；模拟失败返回 `settlement_simulation_failed`，不会新增占用、签名或广播。该行为比原状态预检严格，不支持完整调用的节点不能接纳新付款；已经广播/待确认/成功的历史记录仍只恢复原交易，不因已消费 nonce 或模拟不可用而再次付款。模拟成功不代表账户权限、Energy/Bandwidth 或费用资源充分，也不预留资金、不证明实发或固化到账。
 
 TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth_getCode](https://developers.tron.network/reference/eth_getcode) 当前读取 latest 状态，不能通过传入区块号获得历史状态。前后链头一致只是漂移检查，**不是原子快照或最终性保证**。结算前仍须复查，最终以实际链上执行结果为准。
 

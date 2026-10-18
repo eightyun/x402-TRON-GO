@@ -22,6 +22,7 @@ var (
 	ErrInsufficientBalance   = errors.New("付款人代币余额不足")
 	ErrInsufficientAllowance = errors.New("付款人 Permit2 授权额度不足")
 	ErrNonceUsed             = errors.New("付款授权 nonce 已被链上使用")
+	ErrSettlementSimulation  = errors.New("结算只读调用模拟失败或返回无效数据")
 )
 
 // PreflightConfig 是部署方提供的只读节点与可信合约配置，不可来自付款请求。
@@ -87,6 +88,21 @@ func NewPreflightVerifier(config PreflightConfig) (*PreflightVerifier, error) {
 // TRON eth_call/getCode 使用 latest；前后链头一致只是漂移检查，不是原子快照。
 // 返回成功仍须在结算前重新检查，并进行持久化幂等、链上执行和结果核验。
 func (verifier *PreflightVerifier) Check(ctx context.Context, payload types.PaymentPayload, requirements types.PaymentRequirements, now time.Time) (PreflightResult, error) {
+	return verifier.check(ctx, payload, requirements, nil, now)
+}
+
+// CheckWithSimulation 在同轮预检中额外模拟固定代理的完整settle调用，不签名或广播。
+// executorAddress 必须是部署方固定的实际费用付款方，不能由付款请求指定；原Check仍只检查前置状态。
+// 模拟不预留资金/nonce、不证明账户权限或费用资源充分，也不代表最终到账。
+func (verifier *PreflightVerifier) CheckWithSimulation(ctx context.Context, payload types.PaymentPayload, requirements types.PaymentRequirements, executorAddress string, now time.Time) (PreflightResult, error) {
+	executor, err := configuredAddress(executorAddress)
+	if err != nil {
+		return PreflightResult{}, ErrPreflightConfig
+	}
+	return verifier.check(ctx, payload, requirements, &executor, now)
+}
+
+func (verifier *PreflightVerifier) check(ctx context.Context, payload types.PaymentPayload, requirements types.PaymentRequirements, executor *[20]byte, now time.Time) (PreflightResult, error) {
 	if verifier == nil || verifier.offline == nil || verifier.rpc == nil {
 		return PreflightResult{}, ErrPreflightConfig
 	}
@@ -126,6 +142,24 @@ func (verifier *PreflightVerifier) Check(ctx context.Context, payload types.Paym
 	}
 	if err := verifier.checkNonce(ctx, payer, verified.Nonce); err != nil {
 		return PreflightResult{}, err
+	}
+	if executor != nil {
+		// 与原生交易共用编码，避免模拟与实发使用不同的授权/收款人/签名规范。
+		raw, err := parsePayload(payload.Payload)
+		if err != nil {
+			return PreflightResult{}, err
+		}
+		authorization, err := parseAuthorization(raw.Authorization)
+		if err != nil {
+			return PreflightResult{}, err
+		}
+		callData, err := settlementCallData(authorization, raw.Signature)
+		if err != nil {
+			return PreflightResult{}, err
+		}
+		if err := verifier.rpc.simulateSettlement(ctx, *executor, verifier.offline.proxy, callData); err != nil {
+			return PreflightResult{}, err
+		}
 	}
 	if err := verifier.checkChain(ctx); err != nil {
 		return PreflightResult{}, err

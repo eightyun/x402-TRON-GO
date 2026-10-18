@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -95,17 +96,33 @@ func (rpc *readRPC) call(ctx context.Context, method string, params []interface{
 	if len(data) > maxRPCResponseBytes {
 		return ErrNodeRead
 	}
-	var envelope struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      json.RawMessage `json:"id"`
-		Result  json.RawMessage `json:"result"`
-		Error   json.RawMessage `json:"error"`
-	}
-	if json.Unmarshal(data, &envelope) != nil || envelope.JSONRPC != "2.0" || string(envelope.ID) != "1" || (len(envelope.Error) != 0 && string(envelope.Error) != "null") || len(envelope.Result) == 0 || string(envelope.Result) == "null" {
+	// 复用已有严格对象解析；按精确键读取，避免重复字段或大小写覆盖把错误变为成功。
+	fields, err := nativeObject(data)
+	var version string
+	if err != nil || json.Unmarshal(fields["jsonrpc"], &version) != nil || version != "2.0" || string(fields["id"]) != "1" || len(fields["result"]) == 0 || string(fields["result"]) == "null" {
 		return ErrNodeRead
 	}
-	if json.Unmarshal(envelope.Result, result) != nil {
+	if json.Unmarshal(fields["result"], result) != nil {
 		return ErrNodeRead
+	}
+	return nil
+}
+
+// simulateSettlement 只调用eth_call，不提供任意合约/方法转发入口；调用数据来自本包固定编码器。
+func (rpc *readRPC) simulateSettlement(ctx context.Context, executor, proxy [20]byte, callData []byte) error {
+	var result string
+	if err := rpc.call(ctx, "eth_call", []interface{}{map[string]string{
+		"from": "0x" + hex.EncodeToString(executor[:]), "to": "0x" + hex.EncodeToString(proxy[:]),
+		"data": "0x" + hex.EncodeToString(callData), "value": "0x0",
+	}, "latest"}, &result); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errors.Join(ErrSettlementSimulation, err)
+	}
+	// 固定settle ABI没有返回值，非空数据不能被当成成功或布尔true。
+	if result != "0x" {
+		return ErrSettlementSimulation
 	}
 	return nil
 }

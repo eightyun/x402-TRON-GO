@@ -124,7 +124,7 @@ func (facilitator *Facilitator) Verify(ctx context.Context, payload types.Paymen
 	if err := facilitator.checkPolicy(requirements); err != nil {
 		return nil, x402.NewVerifyError(facilitatorReason(err), "", "")
 	}
-	result, err := facilitator.preflight.Check(ctx, payload, requirements, time.Now())
+	result, err := facilitator.preflight.CheckWithSimulation(ctx, payload, requirements, facilitator.executor, time.Now())
 	if err != nil {
 		return nil, protocolContextError(x402.NewVerifyError(facilitatorReason(err), "", ""), err)
 	}
@@ -154,7 +154,7 @@ func (facilitator *Facilitator) Settle(ctx context.Context, payload types.Paymen
 		return nil, facilitator.settleError(ErrConflict, Record{}, "")
 	}
 	if errors.Is(err, ErrNotFound) || record.State == StateReserved || record.State == StatePrepared {
-		preflight, err := facilitator.preflight.Check(ctx, payload, requirements, time.Now())
+		preflight, err := facilitator.preflight.CheckWithSimulation(ctx, payload, requirements, facilitator.executor, time.Now())
 		if err != nil {
 			return facilitator.recoverConcurrent(ctx, verified, record, requirements, err)
 		}
@@ -325,6 +325,8 @@ func facilitatorReason(err error) string {
 		return "insufficient_allowance"
 	case errors.Is(err, exact.ErrNonceUsed):
 		return "nonce_already_used"
+	case errors.Is(err, exact.ErrSettlementSimulation):
+		return "settlement_simulation_failed"
 	case errors.Is(err, ErrConflict):
 		return "settlement_conflict"
 	default:

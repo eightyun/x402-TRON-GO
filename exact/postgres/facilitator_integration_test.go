@@ -32,23 +32,27 @@ import (
 const facilitatorHeight = uint64(71846434)
 
 type facilitatorTest struct {
-	ctx       context.Context
-	db        *pgxpool.Pool
-	store     *postgres.Store
-	input     vector
-	config    postgres.FacilitatorConfig
-	server    *httptest.Server
-	signs     atomic.Int32
-	writes    atomic.Int32
-	jsonRPCs  atomic.Int32
-	mode      atomic.Int32
-	used      atomic.Bool
-	onMissing func()
-	mu        sync.Mutex
-	signed    exact.SettlementTransaction
-	raw       []byte
-	stamp     int64
-	headTime  int64
+	ctx            context.Context
+	db             *pgxpool.Pool
+	store          *postgres.Store
+	input          vector
+	config         postgres.FacilitatorConfig
+	server         *httptest.Server
+	signs          atomic.Int32
+	writes         atomic.Int32
+	jsonRPCs       atomic.Int32
+	simulations    atomic.Int32
+	simulationMode atomic.Int32
+	onSimulation   func()
+	mode           atomic.Int32
+	used           atomic.Bool
+	onMissing      func()
+	mu             sync.Mutex
+	signed         exact.SettlementTransaction
+	raw            []byte
+	stamp          int64
+	headTime       int64
+	simulatedData  []byte
 }
 
 func prepareFacilitator(t *testing.T, age time.Duration) *facilitatorTest {
@@ -176,6 +180,28 @@ func (fixture *facilitatorTest) node(t *testing.T, w http.ResponseWriter, r *htt
 				return
 			}
 			switch data[:10] {
+			case "0x13cd3b53":
+				fixture.simulations.Add(1)
+				executor, _ := tron.AddressForSigning(fixture.config.ExecutorAddress)
+				encoded, err := hex.DecodeString(data[2:])
+				if err != nil || len(encoded) != 388 || len(call) != 4 || call["from"] != executor || call["to"] != fixture.input.Authorization.Spender || call["value"] != "0x0" || len(arguments) != 2 || string(arguments[1]) != `"latest"` {
+					t.Error("模拟未使用完整受限settle调用/可信费用付款方")
+				}
+				fixture.mu.Lock()
+				fixture.simulatedData = append([]byte(nil), encoded...)
+				fixture.mu.Unlock()
+				if fixture.onSimulation != nil {
+					fixture.onSimulation()
+				}
+				if fixture.simulationMode.Load() == 1 {
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"jsonrpc": "2.0", "id": 1, "error": map[string]interface{}{"code": 3, "message": "synthetic-sensitive-revert"}})
+					return
+				}
+				if fixture.simulationMode.Load() == 2 {
+					result = true
+				} else {
+					result = "0x"
+				}
 			case "0x6afdd850":
 				permit2, _ := tron.AddressForSigning(fixture.input.Config.Permit2Address)
 				result = "0x" + strings.Repeat("0", 24) + permit2[2:]
@@ -216,6 +242,12 @@ func (fixture *facilitatorTest) node(t *testing.T, w http.ResponseWriter, r *htt
 			return
 		}
 		digest := sha256.Sum256(payload[1+n : 1+n+int(length)])
+		fixture.mu.Lock()
+		simulated := append([]byte(nil), fixture.simulatedData...)
+		fixture.mu.Unlock()
+		if len(simulated) != 388 || !bytes.Contains(payload[1+n:1+n+int(length)], simulated) {
+			t.Error("实际广播未使用模拟过的原授权调用")
+		}
 		id := hex.EncodeToString(digest[:])
 		var state string
 		var stored []byte
