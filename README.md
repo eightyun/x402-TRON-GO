@@ -137,6 +137,7 @@ go run ./examples/payer recover
 | `X402_PERMIT2_ADDRESS` / `X402_PROXY_ADDRESS` | 必填，独立核验的可信部署，不提供默认地址 |
 | `X402_PERMIT2_CODE_HASH` / `X402_PROXY_CODE_HASH` | 必填，可信 runtime bytecode 的 `0x` + 32字节 Keccak-256 |
 | `X402_JSON_RPC_URL` | 必填，可信 HTTPS JSON-RPC 端点 |
+| `X402_RPC_BATCH` | 可选，默认`false`；仅显式`true`合并独立读取，节点必须支持JSON-RPC batch，失败不降级 |
 | `X402_NATIVE_NODE_URL` / `X402_GENESIS_BLOCK_ID` | 必填，HTTPS原生节点根URL及独立核验的完整创世块ID；节点须提供 wallet/walletsolidity |
 | `X402_NODE_API_KEY` | 可选，上述节点的服务凭据，不从请求接收 |
 | `X402_ASSET` / `X402_PAY_TO` / `X402_MAX_AMOUNT_ATOMIC` | 必填，固定代币/收款人/单笔金额上限；金额为最小单位正整数 |
@@ -203,6 +204,8 @@ if err != nil {
 `exact/testdata/tronweb-permit2.json` 是 TronWeb 6.3.0 独立生成并验签的公开向量。使用临时随机测试密钥，密钥未保存；这只验证摘要/签名兼容，不是完整客户端或真实链上验收。
 
 ## 只读链上预检
+
+默认保持单请求并行；可在`PreflightConfig`设`BatchRPC: true`（部署检查/facilitator示例设`X402_RPC_BATCH=true`）减少独立检查的HTTP往返。batch不是链上Multicall或原子快照：逻辑读取、完整settle模拟、前后同头和时效检查完全保留；最多6项一组、总响应1MiB，拒绝缺失/重复/未知id或错误响应，不自动降级/重试。公共节点延迟仍可能导致`chain_state_changed`，不能通过关闭校验规避；`chain_read_failed`、`chain_head_stale`、`chain_network_mismatch`、`chain_contract_mismatch`为固定脱敏分类。
 
 `exact.NewPreflightVerifier` 接受 `PreflightConfig`，其 `Authorization` 沿用离线校验的可信合约配置。必须另行提供可信 `NodeURL`、`Permit2CodeHash` 和 `ProxyCodeHash`；两项哈希为 runtime bytecode 的 Keccak-256（`0x` + 32 字节），必须从独立核验的部署资料获得，不能自动信任节点第一次返回的代码。资产地址仍由服务端可信报价决定。
 
@@ -390,6 +393,18 @@ npm --prefix interop/bankofai test
 上游1.2.0的实际网络常量为 `tron:0xcd8690dc` / `tron:0x94a9059e`。互操作测试按其真实报价注册相同网络键，不将其十六进制键偷偷改成十进制，也不修改SDK常量。项目默认仍输出规范十进制；源码较新的网络别名支持不能推断为该发布包已支持。测试单独验证其拒绝十进制报价，未宣称所有上游版本/默认HTTP流程可互通。实际对接须先统一报价/能力发现/注册的网络profile并验证具体版本。
 
 测试覆盖地址、网络、TronWeb 编码/签名对照、授权/费用/时间边界、模拟节点和 PostgreSQL 并发恢复。固化核验覆盖历史过期交易、完整原始字节/块内归属、执行状态、头/块不一致、精确事件/重复和回转、嵌套重复 JSON、网络/超时/并发；恢复与持久化覆盖升级回滚、约束、冲突结果、迟到回调、SQL 失败和实际提交后响应丢失。facilitator 覆盖官方 SDK、HTTP鉴权/输入/容量/错误脱敏、动态临时签名、16并发单次签名/广播、过期及已消费 nonce 的历史恢复、pending/节点故障和未提交字节不广播。自动化用例的回执和区块均为合成夹具；实链接入结果单独记录在前文。Linux CI另构建/启动三个真实示例子进程，测试专用随机PostgreSQL schema与自签名TLS模拟节点；macOS系统根证书不读取SSL_CERT_FILE，因此该合成节点子进程用例明确跳过，不跳过TLS校验。下一步完成独立实链示例接入，再整理预发布供支付网关引用。
+
+## 构建测试网候选包
+
+在干净、已提交的源码目录使用可信Go工具链执行（输出父目录必须为仓库外绝对路径）：
+
+```bash
+go run ./tools/package -output /absolute/path/outside-repository
+```
+
+默认构建macOS/Linux的amd64和arm64，亦可用`-targets linux/amd64`缩小矩阵；不创建Git tag或GitHub release。每个平台含`deployment`、`facilitator`、`server`、`payer`可执行文件、配置模板、两份README、数据库schema/升级SQL、项目及实际运行依赖完整许可证、源码/工具链元数据。独立源码包仅来自`git archive`，不会扫描本机忽略目录。`manifest.json`记录源码SHA和各包摘要，`SHA256SUMS`可用`shasum -a 256 -c SHA256SUMS`核对；这只能检测传输完整性，不代替可信来源/签名。
+
+同一源码提交、Go版本和目标矩阵使用固定编译选项/归档顺序/时间/权限，可重复构建比较摘要；不同Go补丁版本不保证相同字节。工具拒绝脏工作树、已有目标目录、缺失依赖许可证或模块替换，不覆盖旧包。解包后按前述示例配置分别运行`bin/<程序>`；包含的`.env.example`不会自动加载，不得填入主网或无上限授权。候选包依然只是**未审计的测试网示例**，不是资金托管服务、生产部署承诺或稳定版本。
 
 ## 参考与发布状态
 

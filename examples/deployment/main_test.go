@@ -172,19 +172,30 @@ type failingWriter struct{}
 func (failingWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 
 func TestDeploymentEnvironmentAndFailureClassification(t *testing.T) {
-	for _, key := range []string{"X402_NETWORK", "X402_ASSET", "X402_JSON_RPC_URL", "X402_NODE_API_KEY", "X402_PERMIT2_ADDRESS", "X402_PROXY_ADDRESS", "X402_PERMIT2_CODE_HASH", "X402_PROXY_CODE_HASH"} {
+	for _, key := range []string{"X402_NETWORK", "X402_ASSET", "X402_JSON_RPC_URL", "X402_NODE_API_KEY", "X402_PERMIT2_ADDRESS", "X402_PROXY_ADDRESS", "X402_PERMIT2_CODE_HASH", "X402_PROXY_CODE_HASH", "X402_RPC_BATCH"} {
 		t.Setenv(key, "")
 	}
-	config, selectedAsset := loadConfig()
+	config, selectedAsset, err := loadConfig()
+	if err != nil || config.BatchRPC {
+		t.Fatal("默认批量配置无效")
+	}
 	if config.Authorization.Network != tron.NetworkNile || config.Timeout != 15*time.Second || selectedAsset != "" || config.Permit2CodeHash != "" || config.ProxyCodeHash != "" {
 		t.Fatal("默认配置自动填充了资产/代码哈希或改变预算")
 	}
 	t.Setenv("X402_NETWORK", tron.NetworkShasta)
 	t.Setenv("X402_ASSET", asset)
 	t.Setenv("X402_NODE_API_KEY", "test-only-api-key")
-	config, selectedAsset = loadConfig()
+	t.Setenv("X402_RPC_BATCH", "true")
+	config, selectedAsset, err = loadConfig()
+	if err != nil || !config.BatchRPC {
+		t.Fatal("显式批量配置未生效")
+	}
 	if config.Authorization.Network != tron.NetworkShasta || config.APIKey != "test-only-api-key" || selectedAsset != asset {
 		t.Fatal("环境配置未正确读取")
+	}
+	t.Setenv("X402_RPC_BATCH", "TRUE")
+	if _, _, err := loadConfig(); !errors.Is(err, errConfiguration) {
+		t.Fatal("无效批量开关未拒绝")
 	}
 	for err, want := range map[error]string{
 		errConfiguration: "配置无效", exact.ErrPreflightConfig: "配置无效", exact.ErrInvalidConfig: "配置无效",

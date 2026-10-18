@@ -129,6 +129,7 @@ func setBasicConfig(t *testing.T) {
 	t.Helper()
 	for key, value := range map[string]string{
 		"X402_NETWORK": "", "X402_FACILITATOR_LISTEN_ADDR": "", "X402_MAX_CONCURRENT": "",
+		"X402_RPC_BATCH":          "",
 		"X402_SETTLEMENT_TIMEOUT": "", "X402_FEE_LIMIT_SUN": "100000000",
 		"X402_DATABASE_URL": "postgres://example.invalid/unused", "X402_EXECUTOR_KEY_FILE": "/unused/private.key",
 	} {
@@ -142,6 +143,13 @@ func TestLoadConfigRejectsUnsafeDeployment(t *testing.T) {
 	if err != nil || config.address != "127.0.0.1:8081" || config.mechanism.Policy.Network != "tron:3448148188" {
 		t.Fatal("默认配置错误")
 	}
+	t.Run("batch_opt_in", func(t *testing.T) {
+		t.Setenv("X402_RPC_BATCH", "true")
+		config, err := loadConfig()
+		if err != nil || !config.mechanism.Preflight.BatchRPC {
+			t.Fatal("批量配置未生效")
+		}
+	})
 	for _, test := range []struct{ key, value string }{
 		{"X402_NETWORK", "tron:728126428"}, {"X402_NETWORK", "tron:0"},
 		{"X402_FACILITATOR_LISTEN_ADDR", "0.0.0.0:8081"}, {"X402_FACILITATOR_LISTEN_ADDR", "localhost:8081"},
@@ -150,6 +158,7 @@ func TestLoadConfigRejectsUnsafeDeployment(t *testing.T) {
 		{"X402_MAX_CONCURRENT", "-1"}, {"X402_MAX_CONCURRENT", "65"}, {"X402_MAX_CONCURRENT", "invalid"},
 		{"X402_SETTLEMENT_TIMEOUT", "0s"}, {"X402_SETTLEMENT_TIMEOUT", "181s"}, {"X402_SETTLEMENT_TIMEOUT", "invalid"},
 		{"X402_DATABASE_URL", ""}, {"X402_EXECUTOR_KEY_FILE", "relative.key"},
+		{"X402_RPC_BATCH", "TRUE"}, {"X402_RPC_BATCH", "1"},
 	} {
 		t.Run(test.key+"/"+test.value, func(t *testing.T) {
 			t.Setenv(test.key, test.value)

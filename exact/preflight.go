@@ -37,6 +37,8 @@ type PreflightConfig struct {
 	Timeout                time.Duration
 	HTTPClient             *http.Client `json:"-"`
 	AllowInsecureLocalHTTP bool
+	// BatchRPC 显式合并独立只读检查；节点必须支持 JSON-RPC batch，不自动降级。
+	BatchRPC bool
 }
 
 // PreflightResult 仅记录本轮只读观察，不是最终性、扣款或结算证明。
@@ -180,21 +182,6 @@ func (verifier *PreflightVerifier) check(ctx context.Context, payload types.Paym
 	return PreflightResult{Authorization: verified, BlockNumber: after.Number, BlockHash: "0x" + hex.EncodeToString(after.Hash[:]), BlockTimestamp: time.Unix(after.Timestamp, 0).UTC()}, nil
 }
 
-func (verifier *PreflightVerifier) checkChain(ctx context.Context) error {
-	var value string
-	if err := verifier.rpc.call(ctx, "eth_chainId", []interface{}{}, &value); err != nil {
-		return err
-	}
-	chainID, err := rpcQuantity(value)
-	if err != nil {
-		return err
-	}
-	if chainID != uint64(verifier.chainID) {
-		return ErrChainMismatch
-	}
-	return nil
-}
-
 // 每组只有固定、独立的只读检查；等待全部退出，按原逻辑顺序选择错误，而非响应到达顺序。
 func parallelChecks(ctx context.Context, checks ...func(context.Context) error) error {
 	if err := ctx.Err(); err != nil {
@@ -218,37 +205,41 @@ func parallelChecks(ctx context.Context, checks ...func(context.Context) error) 
 }
 
 func (verifier *PreflightVerifier) checkHead(ctx context.Context) (observedHead, error) {
+	var chain string
+	var block rpcBlock
 	var head observedHead
-	err := parallelChecks(ctx, verifier.checkChain, func(ctx context.Context) error {
-		var err error
-		head, err = verifier.rpc.head(ctx)
-		return err
-	})
-	return head, err
+	if err := verifier.rpc.group(ctx,
+		rpcQuery{"eth_chainId", []interface{}{}, &chain, func() error {
+			chainID, err := rpcQuantity(chain)
+			if err != nil {
+				return err
+			}
+			if chainID != uint64(verifier.chainID) {
+				return ErrChainMismatch
+			}
+			return nil
+		}},
+		rpcQuery{"eth_getBlockByNumber", []interface{}{"latest", false}, &block, func() error {
+			var err error
+			head, err = parseHead(block)
+			return err
+		}},
+	); err != nil {
+		return observedHead{}, err
+	}
+	return head, nil
 }
 
 func (verifier *PreflightVerifier) checkContracts(ctx context.Context, asset, payer [20]byte) error {
-	checks := make([]func(context.Context) error, 0, 6)
-	for _, contract := range []struct {
+	contracts := []struct {
 		address [20]byte
 		hash    [32]byte
 	}{
 		{verifier.permit2, verifier.permit2CodeHash},
 		{verifier.offline.proxy, verifier.proxyCodeHash},
 		{asset, [32]byte{}},
-	} {
-		checks = append(checks, func(ctx context.Context) error {
-			code, err := verifier.rpc.code(ctx, contract.address)
-			if err != nil {
-				return err
-			}
-			if len(code) == 0 || (contract.hash != [32]byte{} && keccak(code) != contract.hash) {
-				return ErrContractMismatch
-			}
-			return nil
-		})
 	}
-	for _, getter := range []struct {
+	getters := []struct {
 		address [20]byte
 		method  string
 		want    [32]byte
@@ -256,9 +247,27 @@ func (verifier *PreflightVerifier) checkContracts(ctx context.Context, asset, pa
 		{verifier.offline.proxy, "PERMIT2()", addressWord(verifier.permit2)},
 		{verifier.offline.proxy, "WITNESS_TYPEHASH()", keccak([]byte("Witness(address to,uint256 validAfter)"))},
 		{verifier.permit2, "DOMAIN_SEPARATOR()", verifier.offline.domain},
-	} {
-		checks = append(checks, func(ctx context.Context) error {
-			value, err := verifier.rpc.contractWord(ctx, payer, getter.address, getter.method)
+	}
+	var codes, words [3]string
+	queries := make([]rpcQuery, 0, 6)
+	for index, contract := range contracts {
+		query := codeQuery(contract.address, &codes[index])
+		query.validate = func() error {
+			code, err := rpcCode(codes[index])
+			if err != nil {
+				return err
+			}
+			if len(code) == 0 || (contract.hash != [32]byte{} && keccak(code) != contract.hash) {
+				return ErrContractMismatch
+			}
+			return nil
+		}
+		queries = append(queries, query)
+	}
+	for index, getter := range getters {
+		query := wordQuery(&words[index], payer, getter.address, getter.method)
+		query.validate = func() error {
+			value, err := rpcWord(words[index])
 			if err != nil {
 				return err
 			}
@@ -266,47 +275,46 @@ func (verifier *PreflightVerifier) checkContracts(ctx context.Context, asset, pa
 				return ErrContractMismatch
 			}
 			return nil
-		})
+		}
+		queries = append(queries, query)
 	}
-	return parallelChecks(ctx, checks...)
+	return verifier.rpc.group(ctx, queries...)
 }
 
 func (verifier *PreflightVerifier) checkPaymentState(ctx context.Context, asset, payer [20]byte, amount [32]byte, nonce string) error {
-	return parallelChecks(ctx, func(ctx context.Context) error {
-		balance, err := verifier.rpc.contractWord(ctx, payer, asset, "balanceOf(address)", addressWord(payer))
-		if err != nil {
-			return err
-		}
-		if new(big.Int).SetBytes(balance[:]).Cmp(new(big.Int).SetBytes(amount[:])) < 0 {
-			return ErrInsufficientBalance
-		}
-		return nil
-	}, func(ctx context.Context) error {
-		allowance, err := verifier.rpc.contractWord(ctx, payer, asset, "allowance(address,address)", addressWord(payer), addressWord(verifier.permit2))
-		if err != nil {
-			return err
-		}
-		if new(big.Int).SetBytes(allowance[:]).Cmp(new(big.Int).SetBytes(amount[:])) < 0 {
-			return ErrInsufficientAllowance
-		}
-		return nil
-	}, func(ctx context.Context) error { return verifier.checkNonce(ctx, payer, nonce) })
-}
-
-func (verifier *PreflightVerifier) checkNonce(ctx context.Context, payer [20]byte, nonceText string) error {
-	nonce, err := uint256Word(nonceText, false)
+	nonceWord, err := uint256Word(nonce, false)
 	if err != nil {
 		return ErrInvalidAuthorization
 	}
 	var wordPosition [32]byte
-	new(big.Int).Rsh(new(big.Int).SetBytes(nonce[:]), 8).FillBytes(wordPosition[:])
-	bitmap, err := verifier.rpc.contractWord(ctx, payer, verifier.permit2, "nonceBitmap(address,uint256)", addressWord(payer), wordPosition)
-	if err != nil {
-		return err
+	new(big.Int).Rsh(new(big.Int).SetBytes(nonceWord[:]), 8).FillBytes(wordPosition[:])
+	var values [3]string
+	queries := []rpcQuery{
+		wordQuery(&values[0], payer, asset, "balanceOf(address)", addressWord(payer)),
+		wordQuery(&values[1], payer, asset, "allowance(address,address)", addressWord(payer), addressWord(verifier.permit2)),
+		wordQuery(&values[2], payer, verifier.permit2, "nonceBitmap(address,uint256)", addressWord(payer), wordPosition),
 	}
-	bit := int(nonce[31])
-	if bitmap[31-bit/8]&(1<<uint(bit%8)) != 0 {
-		return ErrNonceUsed
+	for index := range queries {
+		queries[index].validate = func() error {
+			word, err := rpcWord(values[index])
+			if err != nil {
+				return err
+			}
+			if index < 2 {
+				if new(big.Int).SetBytes(word[:]).Cmp(new(big.Int).SetBytes(amount[:])) < 0 {
+					if index == 0 {
+						return ErrInsufficientBalance
+					}
+					return ErrInsufficientAllowance
+				}
+			} else {
+				bit := int(nonceWord[31])
+				if word[31-bit/8]&(1<<uint(bit%8)) != 0 {
+					return ErrNonceUsed
+				}
+			}
+			return nil
+		}
 	}
-	return nil
+	return verifier.rpc.group(ctx, queries...)
 }

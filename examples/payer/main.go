@@ -233,7 +233,7 @@ func run(ctx context.Context, c configuration, mode string, base *http.Client, o
 
 func safeReason(reason string) string {
 	switch reason {
-	case "", "settlement_pending", "settlement_unavailable", "settlement_simulation_failed", "payment_expired", "invalid_signature", "invalid_payment", "insufficient_balance", "insufficient_allowance", "nonce_already_used", "settlement_conflict":
+	case "", "settlement_pending", "settlement_unavailable", "settlement_simulation_failed", "payment_expired", "invalid_signature", "invalid_payment", "insufficient_balance", "insufficient_allowance", "nonce_already_used", "settlement_conflict", "chain_state_changed", "chain_head_stale", "chain_network_mismatch", "chain_contract_mismatch", "chain_read_failed":
 		return reason
 	default:
 		return "payment_unconfirmed"

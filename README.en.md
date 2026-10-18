@@ -136,6 +136,7 @@ The [runnable example](examples/facilitator/main.go) targets Linux/macOS, allows
 | `X402_PERMIT2_ADDRESS` / `X402_PROXY_ADDRESS` | Required independently verified deployments; no default addresses |
 | `X402_PERMIT2_CODE_HASH` / `X402_PROXY_CODE_HASH` | Required trusted runtime-bytecode Keccak-256 hashes, `0x` plus 32 bytes |
 | `X402_JSON_RPC_URL` | Required trusted HTTPS JSON-RPC endpoint |
+| `X402_RPC_BATCH` | Optional, defaults to `false`; only literal `true` batches independent reads. Requires node batch support; no fallback |
 | `X402_NATIVE_NODE_URL` / `X402_GENESIS_BLOCK_ID` | Required HTTPS native-node root URL and independently verified full genesis block ID; wallet/walletsolidity routes required |
 | `X402_NODE_API_KEY` | Optional service credential for these nodes, never request-supplied |
 | `X402_ASSET` / `X402_PAY_TO` / `X402_MAX_AMOUNT_ATOMIC` | Required fixed token/recipient/per-payment cap; positive atomic-unit integer cap |
@@ -174,6 +175,8 @@ The authorization does not bind a specific HTTP URL or request body. Resource se
 The public TronWeb 6.3.0 vector verifies digest/signature compatibility offline. Its ephemeral random test key was discarded; no live wallet or blockchain was used. This is not full client/facilitator interoperability acceptance.
 
 ## Read-only chain preflight
+
+Single-request parallel reads remain the default. Set `PreflightConfig.BatchRPC: true` (`X402_RPC_BATCH=true` for the deployment/facilitator examples) to reduce HTTP round trips. This is JSON-RPC batch, not on-chain Multicall or an atomic snapshot: all logical reads, full settlement simulation, unchanged-head and freshness checks remain mandatory. Groups contain at most six queries with a 1MiB total response limit; missing/duplicate/unknown IDs and error responses fail closed, without fallback or automatic retry. Slow public nodes can still return `chain_state_changed`; do not disable checks. Other fixed, sanitized reasons are `chain_read_failed`, `chain_head_stale`, `chain_network_mismatch`, and `chain_contract_mismatch`.
 
 `exact.NewPreflightVerifier` accepts `PreflightConfig` with trusted `Authorization` settings, `NodeURL`, `Permit2CodeHash` and `ProxyCodeHash`. Hashes must be independently verified runtime-bytecode Keccak-256 values (`0x` + 32 bytes), not learned from the node on first use. Token addresses come from trusted server-side requirements.
 
@@ -360,6 +363,18 @@ Versions and complete tarball integrity are locked. During tests Node network ac
 Upstream 1.2.0 actually uses `tron:0xcd8690dc` / `tron:0x94a9059e`. Tests register the same keys as its real quotes, without silently rewriting them to decimal or patching SDK constants. This project's default remains canonical decimal. Newer source-level alias support does not imply support in that published package. A separate test records rejection of decimal quotes; no all-version/default-HTTP compatibility is claimed. Align quote/discovery/registration network profiles and verify the exact counterpart version before integration.
 
 Tests cover public TronWeb vectors, tampering, amount/fee/time boundaries, simulated nodes and PostgreSQL concurrency/recovery. Solidified checks cover original bytes/block membership, execution, changed heads/blocks, exact/duplicate/reversed events, malformed JSON and network/timeouts. Recovery/persistence cover upgrades/rollback, constraints, conflicting evidence, delayed callbacks, SQL failure and lost responses after actual commit. Facilitator tests cover official SDK/HTTP authentication, input/capacity/error redaction, dynamic ephemeral signatures, 16 concurrent calls with single signing/broadcast, expired/consumed-nonce recovery, pending/node failures and never broadcasting uncommitted bytes. Automated receipts/blocks are synthetic; live exercises are recorded separately above. Linux CI also builds and launches three executable examples with a random PostgreSQL schema and self-signed TLS synthetic node. macOS system roots do not read SSL_CERT_FILE, so that synthetic-process case explicitly skips there without bypassing TLS. Next: standalone live-example integration and prerelease packaging before gateway integration.
+
+## Build testnet candidate packages
+
+Run from a clean, committed checkout with a trusted Go toolchain. The output parent must be an absolute directory outside the repository:
+
+```bash
+go run ./tools/package -output /absolute/path/outside-repository
+```
+
+Defaults: macOS/Linux, amd64/arm64; use e.g. `-targets linux/amd64` for a smaller matrix. No Git tag or GitHub release is created. Each bundle includes `deployment`, `facilitator`, `server`, `payer`, configuration template, both READMEs, database schema/upgrade SQL, project and compiled-dependency license texts, and source/toolchain metadata. The source archive uses only `git archive`, never ignored local directories. `manifest.json` records the revision and archive hashes; check `SHA256SUMS` with `shasum -a 256 -c SHA256SUMS`. Hashes provide integrity, not source authentication/signatures.
+
+Fixed build flags, archive ordering/timestamps/modes permit comparison of repeated builds with the same commit, Go version and target matrix; different Go patch versions need not produce identical bytes. Dirty trees, existing output directories, missing dependency licenses and module replacements are rejected. Run extracted `bin/<program>` with the configuration described above; `.env.example` is not loaded automatically. Do not use Mainnet or unlimited approval. These are **unaudited testnet examples**, not a custody service, production deployment guarantee or stable release.
 
 ## References and status
 

@@ -327,6 +327,16 @@ func facilitatorReason(err error) string {
 		return "nonce_already_used"
 	case errors.Is(err, exact.ErrSettlementSimulation):
 		return "settlement_simulation_failed"
+	case errors.Is(err, exact.ErrChainChanged):
+		return "chain_state_changed"
+	case errors.Is(err, exact.ErrStaleHead):
+		return "chain_head_stale"
+	case errors.Is(err, exact.ErrChainMismatch):
+		return "chain_network_mismatch"
+	case errors.Is(err, exact.ErrContractMismatch):
+		return "chain_contract_mismatch"
+	case errors.Is(err, exact.ErrNodeRead):
+		return "chain_read_failed"
 	case errors.Is(err, ErrConflict):
 		return "settlement_conflict"
 	default:

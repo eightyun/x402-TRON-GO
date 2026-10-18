@@ -34,6 +34,10 @@ func loadConfig() (configuration, error) {
 	if err != nil || network == tron.NetworkMainnet {
 		return configuration{}, errConfiguration
 	}
+	batch := os.Getenv("X402_RPC_BATCH")
+	if batch != "" && batch != "true" && batch != "false" {
+		return configuration{}, errConfiguration
+	}
 	address := os.Getenv("X402_FACILITATOR_LISTEN_ADDR")
 	if address == "" {
 		address = "127.0.0.1:8081"
@@ -67,7 +71,7 @@ func loadConfig() (configuration, error) {
 		http: postgres.HTTPConfig{BearerToken: os.Getenv("X402_FACILITATOR_TOKEN"), MaxConcurrent: parallel},
 		mechanism: postgres.FacilitatorConfig{
 			Preflight: exact.PreflightConfig{Authorization: authorization, NodeURL: os.Getenv("X402_JSON_RPC_URL"),
-				APIKey: os.Getenv("X402_NODE_API_KEY"), Permit2CodeHash: os.Getenv("X402_PERMIT2_CODE_HASH"), ProxyCodeHash: os.Getenv("X402_PROXY_CODE_HASH")},
+				APIKey: os.Getenv("X402_NODE_API_KEY"), Permit2CodeHash: os.Getenv("X402_PERMIT2_CODE_HASH"), ProxyCodeHash: os.Getenv("X402_PROXY_CODE_HASH"), BatchRPC: batch == "true"},
 			Execution: exact.ExecutionConfig{Network: network, NodeURL: os.Getenv("X402_NATIVE_NODE_URL"),
 				APIKey: os.Getenv("X402_NODE_API_KEY"), GenesisBlockID: os.Getenv("X402_GENESIS_BLOCK_ID")},
 			Policy:    exact.ServerConfig{Network: network, Asset: os.Getenv("X402_ASSET"), PayTo: os.Getenv("X402_PAY_TO")},

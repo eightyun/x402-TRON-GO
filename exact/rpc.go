@@ -29,6 +29,7 @@ type readRPC struct {
 	apiKey   string
 	client   *http.Client
 	slots    chan struct{}
+	batch    bool
 }
 
 func newReadRPC(config PreflightConfig) (*readRPC, error) {
@@ -51,38 +52,126 @@ func newReadRPC(config PreflightConfig) (*readRPC, error) {
 		}
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &readRPC{endpoint: endpoint.String(), apiKey: config.APIKey, client: &client, slots: make(chan struct{}, maxConcurrentPreflightRPC)}, nil
+	return &readRPC{endpoint: endpoint.String(), apiKey: config.APIKey, client: &client, slots: make(chan struct{}, maxConcurrentPreflightRPC), batch: config.BatchRPC}, nil
 }
 
-func (rpc *readRPC) call(ctx context.Context, method string, params []interface{}, result interface{}) (err error) {
-	defer func() {
-		if err != nil {
-			err = fmt.Errorf("调用只读 RPC %s: %w", method, err)
+type rpcQuery struct {
+	method   string
+	params   []interface{}
+	result   interface{}
+	validate func() error
+}
+
+type rpcRequest struct {
+	JSONRPC string        `json:"jsonrpc"`
+	ID      int           `json:"id"`
+	Method  string        `json:"method"`
+	Params  []interface{} `json:"params"`
+}
+
+func (rpc *readRPC) call(ctx context.Context, method string, params []interface{}, result interface{}) error {
+	body, err := json.Marshal(rpcRequest{"2.0", 1, method, params})
+	if err != nil {
+		return ErrNodeRead
+	}
+	data, err := rpc.exchange(ctx, body)
+	if err != nil {
+		return fmt.Errorf("调用只读 RPC %s: %w", method, err)
+	}
+	value, err := rpcResult(data, 1)
+	if err != nil || json.Unmarshal(value, result) != nil {
+		return ErrNodeRead
+	}
+	return nil
+}
+
+// group 只接受本包固定检查组，不提供外部任意方法或自动单请求降级。
+func (rpc *readRPC) group(ctx context.Context, queries ...rpcQuery) error {
+	if len(queries) == 0 || len(queries) > maxConcurrentPreflightRPC {
+		return ErrNodeRead
+	}
+	if !rpc.batch {
+		checks := make([]func(context.Context) error, len(queries))
+		for index, query := range queries {
+			checks[index] = func(ctx context.Context) error {
+				if err := rpc.call(ctx, query.method, query.params, query.result); err != nil {
+					return err
+				}
+				if query.validate != nil {
+					return query.validate()
+				}
+				return nil
+			}
 		}
-	}()
+		return parallelChecks(ctx, checks...)
+	}
+	requests := make([]rpcRequest, len(queries))
+	for index, query := range queries {
+		requests[index] = rpcRequest{"2.0", index + 1, query.method, query.params}
+	}
+	body, err := json.Marshal(requests)
+	if err != nil {
+		return ErrNodeRead
+	}
+	data, err := rpc.exchange(ctx, body)
+	if err != nil {
+		return err
+	}
+	var responses []json.RawMessage
+	if len(bytes.TrimSpace(data)) == 0 || bytes.TrimSpace(data)[0] != '[' || json.Unmarshal(data, &responses) != nil || len(responses) != len(queries) {
+		return ErrNodeRead
+	}
+	values := make([]json.RawMessage, len(queries))
+	for _, response := range responses {
+		fields, err := nativeObject(response)
+		var id int
+		if err != nil || json.Unmarshal(fields["id"], &id) != nil || id < 1 || id > len(queries) || values[id-1] != nil {
+			return ErrNodeRead
+		}
+		value, err := rpcResult(response, id)
+		if err != nil {
+			return err
+		}
+		values[id-1] = value
+	}
+	// 完整验证对应关系后才解码；任何一项失败均不能进入后续预检阶段。
+	for index, query := range queries {
+		if values[index] == nil || json.Unmarshal(values[index], query.result) != nil {
+			return ErrNodeRead
+		}
+		if query.validate != nil {
+			if err := query.validate(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func rpcResult(data []byte, id int) (json.RawMessage, error) {
+	fields, err := nativeObject(data)
+	var version string
+	_, hasError := fields["error"]
+	if err != nil || hasError || json.Unmarshal(fields["jsonrpc"], &version) != nil || version != "2.0" || string(fields["id"]) != strconv.Itoa(id) || len(fields["result"]) == 0 || string(fields["result"]) == "null" {
+		return nil, ErrNodeRead
+	}
+	return fields["result"], nil
+}
+
+func (rpc *readRPC) exchange(ctx context.Context, body []byte) ([]byte, error) {
 	// 同一客户端的所有预检共用额度，排队及响应读取均计入调用方原有总预算。
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	case rpc.slots <- struct{}{}:
 	}
 	defer func() { <-rpc.slots }()
 	if err := ctx.Err(); err != nil {
-		return err
-	}
-	// 方法仅由本包的固定只读调用点指定，不导出任意 RPC 转发入口。
-	body, err := json.Marshal(struct {
-		JSONRPC string        `json:"jsonrpc"`
-		ID      int           `json:"id"`
-		Method  string        `json:"method"`
-		Params  []interface{} `json:"params"`
-	}{"2.0", 1, method, params})
-	if err != nil {
-		return ErrNodeRead
+		return nil, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, rpc.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return ErrNodeRead
+		return nil, ErrNodeRead
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
@@ -92,34 +181,25 @@ func (rpc *readRPC) call(ctx context.Context, method string, params []interface{
 	response, err := rpc.client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
-		return ErrNodeRead
+		return nil, ErrNodeRead
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return ErrNodeRead
+		return nil, ErrNodeRead
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxRPCResponseBytes+1))
 	if err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
-		return ErrNodeRead
+		return nil, ErrNodeRead
 	}
 	if len(data) > maxRPCResponseBytes {
-		return ErrNodeRead
+		return nil, ErrNodeRead
 	}
-	// 复用已有严格对象解析；按精确键读取，避免重复字段或大小写覆盖把错误变为成功。
-	fields, err := nativeObject(data)
-	var version string
-	if err != nil || json.Unmarshal(fields["jsonrpc"], &version) != nil || version != "2.0" || string(fields["id"]) != "1" || len(fields["result"]) == 0 || string(fields["result"]) == "null" {
-		return ErrNodeRead
-	}
-	if json.Unmarshal(fields["result"], result) != nil {
-		return ErrNodeRead
-	}
-	return nil
+	return data, nil
 }
 
 // simulateSettlement 只调用eth_call，不提供任意合约/方法转发入口；调用数据来自本包固定编码器。
@@ -141,11 +221,11 @@ func (rpc *readRPC) simulateSettlement(ctx context.Context, executor, proxy [20]
 	return nil
 }
 
-func (rpc *readRPC) code(ctx context.Context, address [20]byte) ([]byte, error) {
-	var result string
-	if err := rpc.call(ctx, "eth_getCode", []interface{}{"0x" + hex.EncodeToString(address[:]), "latest"}, &result); err != nil {
-		return nil, err
-	}
+func codeQuery(address [20]byte, result *string) rpcQuery {
+	return rpcQuery{method: "eth_getCode", params: []interface{}{"0x" + hex.EncodeToString(address[:]), "latest"}, result: result}
+}
+
+func rpcCode(result string) ([]byte, error) {
 	if len(result) < 2 || len(result) > maxRPCResponseBytes || !strings.HasPrefix(result, "0x") || len(result)%2 != 0 {
 		return nil, ErrNodeRead
 	}
@@ -156,19 +236,15 @@ func (rpc *readRPC) code(ctx context.Context, address [20]byte) ([]byte, error) 
 	return code, nil
 }
 
-func (rpc *readRPC) contractWord(ctx context.Context, payer, contract [20]byte, signature string, arguments ...[32]byte) ([32]byte, error) {
+func wordQuery(result *string, payer, contract [20]byte, signature string, arguments ...[32]byte) rpcQuery {
 	selector := keccak([]byte(signature))
 	data := "0x" + hex.EncodeToString(selector[:4])
 	for _, argument := range arguments {
 		data += hex.EncodeToString(argument[:])
 	}
-	var result string
-	if err := rpc.call(ctx, "eth_call", []interface{}{map[string]string{
+	return rpcQuery{method: "eth_call", params: []interface{}{map[string]string{
 		"from": "0x" + hex.EncodeToString(payer[:]), "to": "0x" + hex.EncodeToString(contract[:]), "data": data,
-	}, "latest"}, &result); err != nil {
-		return [32]byte{}, err
-	}
-	return rpcWord(result)
+	}, "latest"}, result: result}
 }
 
 func rpcWord(value string) ([32]byte, error) {
@@ -204,15 +280,21 @@ type observedHead struct {
 	Timestamp int64
 }
 
-func (rpc *readRPC) head(ctx context.Context) (observedHead, error) {
-	var block struct {
-		Number    string `json:"number"`
-		Hash      string `json:"hash"`
-		Timestamp string `json:"timestamp"`
+type rpcBlock struct {
+	Number    string `json:"number"`
+	Hash      string `json:"hash"`
+	Timestamp string `json:"timestamp"`
+}
+
+func (block *rpcBlock) UnmarshalJSON(data []byte) error {
+	fields, err := nativeObject(data)
+	if err != nil || json.Unmarshal(fields["number"], &block.Number) != nil || json.Unmarshal(fields["hash"], &block.Hash) != nil || json.Unmarshal(fields["timestamp"], &block.Timestamp) != nil {
+		return ErrNodeRead
 	}
-	if err := rpc.call(ctx, "eth_getBlockByNumber", []interface{}{"latest", false}, &block); err != nil {
-		return observedHead{}, err
-	}
+	return nil
+}
+
+func parseHead(block rpcBlock) (observedHead, error) {
 	height, heightErr := rpcQuantity(block.Number)
 	hash, hashErr := rpcWord(block.Hash)
 	timestamp, timestampErr := rpcQuantity(block.Timestamp)

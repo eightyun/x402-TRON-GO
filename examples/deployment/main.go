@@ -21,8 +21,10 @@ var errConfiguration = errors.New("部署检查配置无效")
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	config, asset := loadConfig()
-	err := run(ctx, config, asset, os.Stdout)
+	config, asset, err := loadConfig()
+	if err == nil {
+		err = run(ctx, config, asset, os.Stdout)
+	}
 	if err != nil {
 		// 只输出固定分类，绝不回显节点URL、API key、响应正文或环境变量。
 		_, _ = fmt.Fprintln(os.Stderr, "部署检查未通过："+failureReason(err)+"；未加载钱包或发起链上交易。")
@@ -30,7 +32,11 @@ func main() {
 	}
 }
 
-func loadConfig() (exact.PreflightConfig, string) {
+func loadConfig() (exact.PreflightConfig, string, error) {
+	batch := os.Getenv("X402_RPC_BATCH")
+	if batch != "" && batch != "true" && batch != "false" {
+		return exact.PreflightConfig{}, "", errConfiguration
+	}
 	network := os.Getenv("X402_NETWORK")
 	if network == "" {
 		network = tron.NetworkNile
@@ -38,9 +44,9 @@ func loadConfig() (exact.PreflightConfig, string) {
 	config := exact.PreflightConfig{
 		Authorization: exact.Config{Network: network, Permit2Address: os.Getenv("X402_PERMIT2_ADDRESS"), ProxyAddress: os.Getenv("X402_PROXY_ADDRESS")},
 		NodeURL:       os.Getenv("X402_JSON_RPC_URL"), APIKey: os.Getenv("X402_NODE_API_KEY"),
-		Permit2CodeHash: os.Getenv("X402_PERMIT2_CODE_HASH"), ProxyCodeHash: os.Getenv("X402_PROXY_CODE_HASH"), Timeout: 15 * time.Second,
+		Permit2CodeHash: os.Getenv("X402_PERMIT2_CODE_HASH"), ProxyCodeHash: os.Getenv("X402_PROXY_CODE_HASH"), Timeout: 15 * time.Second, BatchRPC: batch == "true",
 	}
-	return config, os.Getenv("X402_ASSET")
+	return config, os.Getenv("X402_ASSET"), nil
 }
 
 func run(ctx context.Context, config exact.PreflightConfig, asset string, output io.Writer) error {
