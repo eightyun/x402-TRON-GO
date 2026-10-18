@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -28,7 +30,7 @@ type readRPC struct {
 	endpoint string
 	apiKey   string
 	client   *http.Client
-	slots    chan struct{}
+	slots    *semaphore.Weighted
 	batch    bool
 }
 
@@ -52,7 +54,7 @@ func newReadRPC(config PreflightConfig) (*readRPC, error) {
 		}
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &readRPC{endpoint: endpoint.String(), apiKey: config.APIKey, client: &client, slots: make(chan struct{}, maxConcurrentPreflightRPC), batch: config.BatchRPC}, nil
+	return &readRPC{endpoint: endpoint.String(), apiKey: config.APIKey, client: &client, slots: semaphore.NewWeighted(maxConcurrentPreflightRPC), batch: config.BatchRPC}, nil
 }
 
 type rpcQuery struct {
@@ -74,7 +76,7 @@ func (rpc *readRPC) call(ctx context.Context, method string, params []interface{
 	if err != nil {
 		return ErrNodeRead
 	}
-	data, err := rpc.exchange(ctx, body)
+	data, err := rpc.exchange(ctx, body, 1)
 	if err != nil {
 		return fmt.Errorf("调用只读 RPC %s: %w", method, err)
 	}
@@ -113,7 +115,7 @@ func (rpc *readRPC) group(ctx context.Context, queries ...rpcQuery) error {
 	if err != nil {
 		return ErrNodeRead
 	}
-	data, err := rpc.exchange(ctx, body)
+	data, err := rpc.exchange(ctx, body, int64(len(queries)))
 	if err != nil {
 		return err
 	}
@@ -158,14 +160,12 @@ func rpcResult(data []byte, id int) (json.RawMessage, error) {
 	return fields["result"], nil
 }
 
-func (rpc *readRPC) exchange(ctx context.Context, body []byte) ([]byte, error) {
+func (rpc *readRPC) exchange(ctx context.Context, body []byte, weight int64) ([]byte, error) {
 	// 同一客户端的所有预检共用额度，排队及响应读取均计入调用方原有总预算。
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case rpc.slots <- struct{}{}:
+	if err := rpc.slots.Acquire(ctx, weight); err != nil {
+		return nil, err
 	}
-	defer func() { <-rpc.slots }()
+	defer rpc.slots.Release(weight)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

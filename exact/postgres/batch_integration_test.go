@@ -58,13 +58,13 @@ func TestFacilitatorBatchSettleAndOriginalRecovery(t *testing.T) {
 	fixture.config.Preflight.NodeURL = server.URL + "/jsonrpc"
 	fixture.config.Preflight.BatchRPC = true
 	result, err := fixture.mechanism(t).Settle(fixture.ctx, envelope(t, fixture.input), fixture.input.Requirements, nil)
-	if err != nil || !result.Success || result.Transaction == "" || calls.Load() != 4 || fixture.jsonRPCs.Load() != 14 || fixture.simulations.Load() != 1 || fixture.signs.Load() != 1 || fixture.writes.Load() != 1 {
+	if err != nil || !result.Success || result.Transaction == "" || calls.Load() != 3 || fixture.jsonRPCs.Load() != 14 || fixture.simulations.Load() != 1 || fixture.signs.Load() != 1 || fixture.writes.Load() != 1 {
 		t.Fatalf("批量结算未保留完整校验: %v calls=%d reads=%d", err, calls.Load(), fixture.jsonRPCs.Load())
 	}
 	server.Close()
 	fixture.server.Close()
 	again, err := fixture.mechanism(t).Settle(fixture.ctx, envelope(t, fixture.input), fixture.input.Requirements, nil)
-	if err != nil || !again.Success || again.Transaction != result.Transaction || fixture.signs.Load() != 1 || fixture.writes.Load() != 1 || calls.Load() != 4 {
+	if err != nil || !again.Success || again.Transaction != result.Transaction || fixture.signs.Load() != 1 || fixture.writes.Load() != 1 || calls.Load() != 3 {
 		t.Fatal("恢复重复签名、广播或读取预检", err)
 	}
 }

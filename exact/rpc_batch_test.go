@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ func TestBatchPreflightAndSimulation(t *testing.T) {
 	config := preflightConfig(input, server.URL+"/jsonrpc")
 	config.BatchRPC = true
 	result, err := preflightFor(t, config).CheckWithSimulation(context.Background(), envelope(t, input), input.Requirements, loadSettlementVector(t).Config.ExecutorAddress, time.Unix(input.Now, 0))
-	if err != nil || result.BlockNumber != 123 || reads.Load() != 13 || simulations.Load() != 1 || calls.Load() != 5 {
+	if err != nil || result.BlockNumber != 123 || reads.Load() != 13 || simulations.Load() != 1 || calls.Load() != 4 {
 		t.Fatalf("batch改变检查或未减少往返: result=%+v err=%v reads=%d sim=%d requests=%d", result, err, reads.Load(), simulations.Load(), calls.Load())
 	}
 }
@@ -97,19 +98,19 @@ func TestBatchRejectsAmbiguousOrIncompleteResponses(t *testing.T) {
 		{"empty", func([]json.RawMessage) []byte { return []byte(`[]`) }},
 		{"missing", func(r []json.RawMessage) []byte { b, _ := json.Marshal(r[:1]); return b }},
 		{"extra", func(r []json.RawMessage) []byte { b, _ := json.Marshal(append(r, r[0])); return b }},
-		{"duplicate_id", func(r []json.RawMessage) []byte { b, _ := json.Marshal([]json.RawMessage{r[0], r[0]}); return b }},
+		{"duplicate_id", func(r []json.RawMessage) []byte { r[1] = r[0]; b, _ := json.Marshal(r); return b }},
 		{"unknown_id", func(r []json.RawMessage) []byte {
-			r[0] = bytes.Replace(r[0], []byte(`"id":2`), []byte(`"id":3`), 1)
+			r[0] = bytes.Replace(r[0], []byte(`"id":6`), []byte(`"id":7`), 1)
 			b, _ := json.Marshal(r)
 			return b
 		}},
 		{"string_id", func(r []json.RawMessage) []byte {
-			r[0] = bytes.Replace(r[0], []byte(`"id":2`), []byte(`"id":"2"`), 1)
+			r[0] = bytes.Replace(r[0], []byte(`"id":6`), []byte(`"id":"6"`), 1)
 			b, _ := json.Marshal(r)
 			return b
 		}},
 		{"fraction_id", func(r []json.RawMessage) []byte {
-			r[0] = bytes.Replace(r[0], []byte(`"id":2`), []byte(`"id":2.0`), 1)
+			r[0] = bytes.Replace(r[0], []byte(`"id":6`), []byte(`"id":6.0`), 1)
 			b, _ := json.Marshal(r)
 			return b
 		}},
@@ -119,7 +120,9 @@ func TestBatchRejectsAmbiguousOrIncompleteResponses(t *testing.T) {
 			return b
 		}},
 		{"nested_duplicate", func(r []json.RawMessage) []byte {
-			r[0] = bytes.Replace(r[0], []byte(`"number":`), []byte(`"number":"0x7b","number":`), 1)
+			for i := range r {
+				r[i] = bytes.Replace(r[i], []byte(`"number":`), []byte(`"number":"0x7b","number":`), 1)
+			}
 			b, _ := json.Marshal(r)
 			return b
 		}},
@@ -217,13 +220,16 @@ func TestBatchPreservesStateAndHeadChecks(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			input := loadVector(t)
-			base, _, _ := simulationNode(t, input, test.mutate)
+			base, _, simulations := simulationNode(t, input, test.mutate)
 			server, _ := batchNode(t, base.Config.Handler, nil)
 			config := preflightConfig(input, server.URL+"/jsonrpc")
 			config.BatchRPC = true
 			_, err := preflightFor(t, config).CheckWithSimulation(context.Background(), envelope(t, input), input.Requirements, loadSettlementVector(t).Config.ExecutorAddress, time.Unix(input.Now, 0))
 			if !errors.Is(err, test.want) {
 				t.Fatalf("检查被绕过: %v want %v", err, test.want)
+			}
+			if test.name != "changed_head" && test.name != "simulation" && simulations.Load() != 0 {
+				t.Fatal("前置检查拒绝后仍执行完整模拟")
 			}
 		})
 	}
@@ -233,9 +239,11 @@ func TestBatchHonorsContextWithoutFallback(t *testing.T) {
 	t.Parallel()
 	input := loadVector(t)
 	calls := new(atomic.Int64)
+	entered := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		_, _ = io.Copy(io.Discard, r.Body)
+		close(entered)
 		select {
 		case <-r.Context().Done():
 		case <-time.After(2 * time.Second):
@@ -245,10 +253,70 @@ func TestBatchHonorsContextWithoutFallback(t *testing.T) {
 	config := preflightConfig(input, server.URL)
 	config.BatchRPC = true
 	verifier := preflightFor(t, config)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, err := verifier.Check(ctx, envelope(t, input), input.Requirements, time.Unix(input.Now, 0))
-	if !errors.Is(err, context.DeadlineExceeded) || calls.Load() != 1 {
+	finished := make(chan error, 1)
+	payload := envelope(t, input)
+	go func() {
+		_, err := verifier.Check(ctx, payload, input.Requirements, time.Unix(input.Now, 0))
+		finished <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("batch请求未到达节点")
+	}
+	cancel()
+	var err error
+	select {
+	case err = <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("取消后请求未退出")
+	}
+	if !errors.Is(err, context.Canceled) || calls.Load() != 1 {
 		t.Fatalf("batch未按预算取消: %v calls=%d", err, calls.Load())
+	}
+}
+
+func TestBatchSharesLogicalReadLimitAcrossCallers(t *testing.T) {
+	t.Parallel()
+	input := loadVector(t)
+	base, _ := testNode(t, input, nil)
+	batch, _ := batchNode(t, base.Config.Handler, nil)
+	var active, maximum atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var queries []json.RawMessage
+		if json.Unmarshal(body, &queries) != nil {
+			t.Error("请求非batch")
+			return
+		}
+		count := active.Add(int64(len(queries)))
+		defer active.Add(-int64(len(queries)))
+		for old := maximum.Load(); count > old; old = maximum.Load() {
+			if maximum.CompareAndSwap(old, count) {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		batch.Config.Handler.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	config := preflightConfig(input, server.URL+"/jsonrpc")
+	config.BatchRPC = true
+	verifier := preflightFor(t, config)
+	payload := envelope(t, input)
+	var workers sync.WaitGroup
+	for range 12 {
+		workers.Go(func() {
+			if _, err := verifier.Check(context.Background(), payload, input.Requirements, time.Unix(input.Now, 0)); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	workers.Wait()
+	if maximum.Load() != 6 || active.Load() != 0 {
+		t.Fatalf("batch放大并发或泄漏额度: max=%d active=%d", maximum.Load(), active.Load())
 	}
 }

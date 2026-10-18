@@ -205,6 +205,8 @@ if err != nil {
 
 ## 只读链上预检
 
+batch付款预检先合并链ID/初始头与部分合约读取，再补余下合约和付款状态，减少一轮往返；末组中其他只读查询可能在某项拒绝前已经发送，但所有检查必须通过，才单独执行完整模拟及末头核对。默认模式保持原阶段闸门。任一模式都不是原子快照，也不保证公共RPC每轮可用。
+
 默认保持单请求并行；可在`PreflightConfig`设`BatchRPC: true`（部署检查/facilitator示例设`X402_RPC_BATCH=true`）减少独立检查的HTTP往返。batch不是链上Multicall或原子快照：逻辑读取、完整settle模拟、前后同头和时效检查完全保留；最多6项一组、总响应1MiB，拒绝缺失/重复/未知id或错误响应，不自动降级/重试。公共节点延迟仍可能导致`chain_state_changed`，不能通过关闭校验规避；`chain_read_failed`、`chain_head_stale`、`chain_network_mismatch`、`chain_contract_mismatch`为固定脱敏分类。
 
 `exact.NewPreflightVerifier` 接受 `PreflightConfig`，其 `Authorization` 沿用离线校验的可信合约配置。必须另行提供可信 `NodeURL`、`Permit2CodeHash` 和 `ProxyCodeHash`；两项哈希为 runtime bytecode 的 Keccak-256（`0x` + 32 字节），必须从独立核验的部署资料获得，不能自动信任节点第一次返回的代码。资产地址仍由服务端可信报价决定。
@@ -222,7 +224,7 @@ if err != nil {
 
 原 `Check` 保持 13 次读取；带完整模拟的一轮为 14 次，共用默认 15 秒、上限 1 分钟的总预算，不自动重试。独立只读查询分组并发：链 ID 与链头、六项合约检查、余额/allowance/nonce，完整模拟仍在前置检查全部通过后单独执行。每个预检器共用最多6个在途 JSON-RPC 额度，排队也计入预算，组内任务全部退出后才返回；取消/超时保留 context 语义，其他并发错误按原逻辑顺序选择，不因响应快慢改变分类。失败组中的其他只读请求可能已发送，但不会进入后续模拟/签名/广播。
 
-自定义 `HTTPClient`/Transport 须支持并发并遵守 context 取消。该上限不是跨多个预检器的全局限流或累计费用预算，突发请求仍可能触发节点429并被拒绝；未引入 JSON-RPC batch、Multicall 合约依赖、缓存或失败时串行降级。最新链头仍最多落后服务端60秒或超前5秒，前后链头仍须一致；较慢节点上仍可能被保守拒绝，调用方可在自身预算内重新预检，但不能据此自动发起新交易。
+自定义 `HTTPClient`/Transport 须支持并发并遵守 context 取消。单请求与显式batch均按逻辑读取数共用6额度，batch不把并发放大成36读。该上限不是跨多个预检器的全局限流或累计费用预算，突发请求仍可能触发节点429并被拒绝；没有Multicall合约依赖、缓存或失败时自动降级。最新链头仍最多落后服务端60秒或超前5秒，前后链头仍须一致；较慢节点上仍可能被保守拒绝，调用方可在自身预算内重新预检，但不能据此自动发起新交易。
 
 自建 facilitator 的 `/verify` 和新付款 `/settle` **强制完整模拟**，使用配置的 `ExecutorAddress`；模拟失败返回 `settlement_simulation_failed`，不会新增占用、签名或广播。该行为比原状态预检严格，不支持完整调用的节点不能接纳新付款；已经广播/待确认/成功的历史记录仍只恢复原交易，不因已消费 nonce 或模拟不可用而再次付款。模拟成功不代表账户权限、Energy/Bandwidth 或费用资源充分，也不预留资金、不证明实发或固化到账。
 

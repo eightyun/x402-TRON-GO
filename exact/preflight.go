@@ -119,13 +119,6 @@ func (verifier *PreflightVerifier) check(ctx context.Context, payload types.Paym
 	if err != nil {
 		return PreflightResult{}, err
 	}
-	before, err := verifier.checkHead(ctx)
-	if err != nil {
-		return PreflightResult{}, err
-	}
-	if err := before.fresh(now); err != nil {
-		return PreflightResult{}, err
-	}
 	asset, _, amount, err := verifier.offline.requirements(requirements)
 	if err != nil {
 		return PreflightResult{}, err
@@ -134,11 +127,42 @@ func (verifier *PreflightVerifier) check(ctx context.Context, payload types.Paym
 	if err != nil {
 		return PreflightResult{}, ErrInvalidAuthorization
 	}
-	if err := verifier.checkContracts(ctx, asset, payer); err != nil {
-		return PreflightResult{}, err
-	}
-	if err := verifier.checkPaymentState(ctx, asset, payer, amount, verified.Nonce); err != nil {
-		return PreflightResult{}, err
+	var before observedHead
+	if verifier.rpc.batch {
+		queries := append(verifier.headQueries(&before), verifier.contractQueries(asset, payer)...)
+		payment, err := verifier.paymentQueries(asset, payer, amount, verified.Nonce)
+		if err != nil {
+			return PreflightResult{}, err
+		}
+		queries = append(queries, payment...)
+		// 首组包含原始头，第二组只补独立只读状态；完整模拟仍需全部检查通过。
+		if err := verifier.rpc.group(ctx, queries[:6]...); err != nil {
+			return PreflightResult{}, err
+		}
+		if err := before.fresh(now); err != nil {
+			return PreflightResult{}, err
+		}
+		if err := verifier.rpc.group(ctx, queries[6:]...); err != nil {
+			return PreflightResult{}, err
+		}
+	} else {
+		before, err = verifier.checkHead(ctx)
+		if err != nil {
+			return PreflightResult{}, err
+		}
+		if err := before.fresh(now); err != nil {
+			return PreflightResult{}, err
+		}
+		if err := verifier.checkContracts(ctx, asset, payer); err != nil {
+			return PreflightResult{}, err
+		}
+		queries, err := verifier.paymentQueries(asset, payer, amount, verified.Nonce)
+		if err != nil {
+			return PreflightResult{}, err
+		}
+		if err := verifier.rpc.group(ctx, queries...); err != nil {
+			return PreflightResult{}, err
+		}
 	}
 	if executor != nil {
 		// 与原生交易共用编码，避免模拟与实发使用不同的授权/收款人/签名规范。
@@ -205,10 +229,15 @@ func parallelChecks(ctx context.Context, checks ...func(context.Context) error) 
 }
 
 func (verifier *PreflightVerifier) checkHead(ctx context.Context) (observedHead, error) {
+	var head observedHead
+	err := verifier.rpc.group(ctx, verifier.headQueries(&head)...)
+	return head, err
+}
+
+func (verifier *PreflightVerifier) headQueries(head *observedHead) []rpcQuery {
 	var chain string
 	var block rpcBlock
-	var head observedHead
-	if err := verifier.rpc.group(ctx,
+	return []rpcQuery{
 		rpcQuery{"eth_chainId", []interface{}{}, &chain, func() error {
 			chainID, err := rpcQuantity(chain)
 			if err != nil {
@@ -221,16 +250,17 @@ func (verifier *PreflightVerifier) checkHead(ctx context.Context) (observedHead,
 		}},
 		rpcQuery{"eth_getBlockByNumber", []interface{}{"latest", false}, &block, func() error {
 			var err error
-			head, err = parseHead(block)
+			*head, err = parseHead(block)
 			return err
 		}},
-	); err != nil {
-		return observedHead{}, err
 	}
-	return head, nil
 }
 
 func (verifier *PreflightVerifier) checkContracts(ctx context.Context, asset, payer [20]byte) error {
+	return verifier.rpc.group(ctx, verifier.contractQueries(asset, payer)...)
+}
+
+func (verifier *PreflightVerifier) contractQueries(asset, payer [20]byte) []rpcQuery {
 	contracts := []struct {
 		address [20]byte
 		hash    [32]byte
@@ -278,13 +308,13 @@ func (verifier *PreflightVerifier) checkContracts(ctx context.Context, asset, pa
 		}
 		queries = append(queries, query)
 	}
-	return verifier.rpc.group(ctx, queries...)
+	return queries
 }
 
-func (verifier *PreflightVerifier) checkPaymentState(ctx context.Context, asset, payer [20]byte, amount [32]byte, nonce string) error {
+func (verifier *PreflightVerifier) paymentQueries(asset, payer [20]byte, amount [32]byte, nonce string) ([]rpcQuery, error) {
 	nonceWord, err := uint256Word(nonce, false)
 	if err != nil {
-		return ErrInvalidAuthorization
+		return nil, ErrInvalidAuthorization
 	}
 	var wordPosition [32]byte
 	new(big.Int).Rsh(new(big.Int).SetBytes(nonceWord[:]), 8).FillBytes(wordPosition[:])
@@ -316,5 +346,5 @@ func (verifier *PreflightVerifier) checkPaymentState(ctx context.Context, asset,
 			return nil
 		}
 	}
-	return verifier.rpc.group(ctx, queries...)
+	return queries, nil
 }
