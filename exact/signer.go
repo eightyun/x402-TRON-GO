@@ -44,6 +44,16 @@ func (signer *EOASigner) Address() string {
 
 // SignAuthorization 签署已计算的 TIP-712 摘要，不加前缀、不再次哈希。
 func (signer *EOASigner) SignAuthorization(ctx context.Context, digest [32]byte) ([]byte, error) {
+	return signer.signDigest(ctx, digest)
+}
+
+// SignTransaction 签署可信构建器计算的原生交易 SHA-256 摘要，不加前缀、不再次哈希。
+// 必须作为 SettlementBuilder/Facilitator 的签名器使用，不能向不可信调用方暴露任意摘要签名服务。
+func (signer *EOASigner) SignTransaction(ctx context.Context, digest [32]byte) ([]byte, error) {
+	return signer.signDigest(ctx, digest)
+}
+
+func (signer *EOASigner) signDigest(ctx context.Context, digest [32]byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

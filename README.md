@@ -2,7 +2,7 @@
 
 简体中文 | [English](README.en.md)
 
-面向 x402 的独立 TRON Go 适配 SDK，目标是让客户端/Agent、API 服务端和 facilitator 直接使用 TRON 支付，不必自行实现链适配，也不依赖我们的支付网关。当前已有官方客户端、资源服务端和 PostgreSQL facilitator 机制，以及授权预检、交易构建/广播、固化精确到账核验和持久化恢复。**facilitator HTTP 启动示例及真实测试网闭环仍未完成，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
+面向 x402 的独立 TRON Go 适配 SDK，目标是让客户端/Agent、API 服务端和 facilitator 直接使用 TRON 支付，不必自行实现链适配，也不依赖我们的支付网关。当前已有官方三端机制、facilitator HTTP 启动示例，以及授权预检、交易构建/广播、固化精确到账核验和持久化恢复。**真实测试网闭环仍未完成，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
 
 ## 开箱即用进度
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 客户端 / Agent | 已实现官方 `SchemeNetworkClient`；配置付款策略和签名器，由官方 HTTP 客户端处理 402 与签名重试 |
 | API 资源服务端 | 已实现官方 `SchemeNetworkServer`、Permit2 报价与 `upfront` 中间件示例；仍需可信 facilitator，不能仅验签就发货 |
-| 自建 facilitator | 已实现官方 `SchemeNetworkFacilitator`，串联预检、受控签名/广播、有界确认与原交易恢复；待 HTTP 启动示例和真实测试网验收 |
+| 自建 facilitator | 已实现官方机制和带鉴权/并发上限的 HTTP 启动示例，串联预检、受控签名/广播、有界确认与原交易恢复；待真实测试网验收 |
 
 普通客户端不需要 PostgreSQL，不加载支付网关的商户/账本模块。数据库只是自建 facilitator 可选的持久化实现。网络、资产与收款策略、钱包签名、Gas 和必要的 Permit2 代币授权仍是接入前置条件；不自动授权或隐式上链。
 
@@ -80,11 +80,43 @@ func paymentHTTPClient(contracts exact.Config, signer *exact.EOASigner, asset, p
 | `X402_PAY_TO` | 必填，商户收款地址 |
 | `X402_PRICE_ATOMIC` | 必填，单次价格最小单位正整数 |
 | `X402_FACILITATOR_URL` | 必填，可信 HTTPS facilitator 基础 URL，无 userinfo/query/fragment |
+| `X402_FACILITATOR_TOKEN` | 本项目自建服务必填；通过官方 `AuthProvider` 给三个端点发送 Bearer，第三方无需认证时可不设 |
+| `X402_ALLOW_INSECURE_LOCAL_FACILITATOR_HTTP` | 默认关闭；仅显式 `true` 允许明文连接字面 loopback IP，不接受 `localhost` 或公网 HTTP |
 | `X402_LISTEN_ADDR` | 默认 `127.0.0.1:8080` |
 
 示例启动前显式 `Initialize` 并构建报价，配置/能力校验失败就退出，不忽略错误继续监听。提供 `GET /resource`，未付款返回 402；HEAD 被拒绝，不能利用 Go GET 路由的 HEAD 匹配绕过。配置了有界启动/结算/HTTP 超时、禁上游重定向、请求头上限和优雅关闭。对外部署应加 TLS 入口及适当鉴权；第三方 facilitator 认证应使用官方 `AuthProvider`，不要把 token 拼进 URL。
 
-**本项目尚无经过真实测试网验收的 facilitator HTTP 服务**。已有 PostgreSQL 机制可注册到官方 SDK，配套 HTTP 启动示例仍待补齐；运行资源服务端示例需另行配置经过验证的服务，不默认使用公共地址。资源服务端门槛测试使用测试专用 facilitator，机制测试则使用真实实现加模拟链节点；两者都不是链上验收证明。
+远程调用预算200秒，覆盖 facilitator 最多180秒的机制预算；中间件410秒、HTTP写超时420秒，允许官方对携带原 txid 的 pending 原样重试一次。启动能力发现仍限30秒；反向代理和调用方也需匹配预算。不要把超时解释成付款失败或创建新授权。
+
+**尚无真实测试网验收证明**。可使用下文自建 HTTP 示例，但必须独立准备/核验合约和节点，不默认使用公共 facilitator 地址。资源服务端门槛测试使用测试专用 facilitator；HTTP 结算测试使用真实机制、真实 PostgreSQL 加模拟链节点，不能视为链上验收。
+
+## 自建 facilitator HTTP 示例
+
+可复用 `postgres.NewHTTPHandler(mechanism, postgres.HTTPConfig{BearerToken: token, MaxConcurrent: 8})`，内部注册官方 SDK 并提供 `GET /supported`、`POST /verify`、`POST /settle`。令牌须为32~256字节无空白 ASCII，所有端点都认证；JSON限64KiB，拒绝重复/歧义键、未知信封字段、尾随内容和非v2请求。默认最多8个同时执行的预检/结算（可设1~64），满载直接503且不签名/广播；这是单进程并发上限，不是累计费用预算。
+
+[可运行示例](examples/facilitator/main.go) 面向 Linux/macOS，只允许 Nile/Shasta 和字面 loopback IP 监听，**拒绝主网和公网绑定**。配置以下变量后执行 `go run ./examples/facilitator`：
+
+| 变量 | 含义 |
+| --- | --- |
+| `X402_NETWORK` | 默认 Nile；也可显式配置 Shasta |
+| `X402_DATABASE_URL` | 必填，独立日志库；可信 `search_path`、最小运行权限，远程库使用 TLS |
+| `X402_EXECUTOR_KEY_FILE` | 必填，绝对路径；服务用户拥有的0400/0600普通文件，64个hex字符（可带一个换行），拒绝末级符号链接 |
+| `X402_FACILITATOR_TOKEN` | 必填，与资源服务端一致；通过部署环境注入，不写进源码、URL或日志 |
+| `X402_PERMIT2_ADDRESS` / `X402_PROXY_ADDRESS` | 必填，独立核验的可信部署，不提供默认地址 |
+| `X402_PERMIT2_CODE_HASH` / `X402_PROXY_CODE_HASH` | 必填，可信 runtime bytecode 的 `0x` + 32字节 Keccak-256 |
+| `X402_JSON_RPC_URL` | 必填，可信 HTTPS JSON-RPC 端点 |
+| `X402_NATIVE_NODE_URL` / `X402_GENESIS_BLOCK_ID` | 必填，HTTPS原生节点根URL及独立核验的完整创世块ID；节点须提供 wallet/walletsolidity |
+| `X402_NODE_API_KEY` | 可选，上述节点的服务凭据，不从请求接收 |
+| `X402_ASSET` / `X402_PAY_TO` / `X402_MAX_AMOUNT_ATOMIC` | 必填，固定代币/收款人/单笔金额上限；金额为最小单位正整数 |
+| `X402_FEE_LIMIT_SUN` | 必填，单笔正数费用上限，**不是**累计Gas预算 |
+| `X402_SETTLEMENT_TIMEOUT` | 默认 `90s`，允许1秒~3分钟；原交易生命周期固定60秒，已提交原交易仍可继续等待/恢复 |
+| `X402_MAX_CONCURRENT` / `X402_FACILITATOR_LISTEN_ADDR` | 默认8 / `127.0.0.1:8081` |
+
+首次部署由管理员用单独迁移账号显式应用 [schema.sql](exact/postgres/schema.sql)，已有旧表须按前文升级；不把数据库URL/口令放进命令行参数。运行角色不应有 DDL、DELETE、TRUNCATE 权限。启动只检查配置、数据库连通性和当前版本列的可读性，**不建表、不迁移、不扫描全部约束、不探测链上部署、不签名、不批准代币授权、不发交易**。这不是完整部署验收；管理员仍须核对完整 schema、费用付款方默认 owner 权限与TRX/能量、代币语义和付款人 Permit2 allowance。
+
+本地资源服务端可设置 `X402_FACILITATOR_URL=http://127.0.0.1:8081`、同一令牌和 `X402_ALLOW_INSECURE_LOCAL_FACILITATOR_HTTP=true` 后启动 `go run ./examples/server`；跨机器部署必须由可信 TLS 入口转发到本机监听，并配置入口限流/累计费用预算。私钥仅在内存使用，关闭时尽力擦除，不等于 HSM/MPC；SDK 可用外部 `FacilitatorConfig.Signer`。示例只加载显式指定的密钥文件，不自动查找或修改已有钱包。
+
+接口返回官方响应结构；未知/待确认仍为 `success=false`，HTTP错误保留 `settlement_pending` 和原 txid，官方客户端可原样恢复。断线/503不代表原付款失败，禁止重新生成付款授权。SIGTERM优雅关闭等待已接收请求结束，强制中断后依靠同一数据库日志恢复，不自动启动后台执行器或重播。
 
 先结算意味着业务 handler 随后失败时不会自动退款，也不应再次结算；应用需设计履约幂等、查询和补偿。新服务端的 upfront 报价需要本次新版客户端；原有不带 paymentFlow 的报价和签名仍兼容。授权摘要不绑定 paymentFlow，校验器与官方服务端会核对可信报价和 accepted 一致，不能通过剥离该字段降级流程。
 
@@ -198,7 +230,7 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 
 重启后可调用 `exact.RestoreSettlement(config, executorAddress, originalTransaction)`，仅从持久化的原签名交易恢复 `PreparedSettlement`。`config` 和费用付款方必须来自可信部署配置。严格解码本包固定的 Protobuf/ABI，重编码逐字节比对，并重新核对付款人的 TIP-712 签名、费用付款人的交易签名和原 txid；授权参数从原调用提取，不采信额外历史 JSON 或当前报价。恢复不调用 `Build`，不伪造当前时间验证过期授权，不续期、不签名、不广播。TAPOS 字节不等于完整参考块证明；恢复本身也不证明原报价、预检或到账成功。
 
-恢复后必须将 `prepared.Authorization()` 与原日志的可信授权标识完全比较，再调用只读固化核验。仅接受本包的单一合约调用、单一 EOA 签名和固定规范编码，其他合法 TRON 交易也可能拒绝；不是通用历史交易导入器。下面的 `ConfirmSettlement` 串联恢复、核验及成功持久化；facilitator 机制已经使用该流程，但 HTTP 部署与真实测试网验收仍待完成，不能把模拟测试当作上线验收。
+恢复后必须将 `prepared.Authorization()` 与原日志的可信授权标识完全比较，再调用只读固化核验。仅接受本包的单一合约调用、单一 EOA 签名和固定规范编码，其他合法 TRON 交易也可能拒绝；不是通用历史交易导入器。下面的 `ConfirmSettlement` 串联恢复、核验及成功持久化，facilitator 及 HTTP 示例均使用该流程；真实测试网验收仍待完成，不能把模拟测试当作上线验收。
 
 ## 持久化结算日志（可选 PostgreSQL）
 
@@ -240,7 +272,7 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 - `Settle` 不依赖先 `Verify`。新请求完整验签/策略/时效/链上预检后占用日志；单行事务锁内再次读取状态、构建、签名并提交唯一原交易，事务成功后才能广播。预检、广播和最终性等待不持有该事务锁；并发实例竞争失败后追踪原交易，不重新付款。
 - 已 unknown/pending/succeeded 的原授权只做可信报价/签名/持久化身份匹配及原交易恢复，不再按当前时效拒绝历史请求或查询已消费的 nonce。底层 `VerifyAuthorizationBinding` 仅作历史识别，不能代替新请求的 `VerifyAuthorization`/`Preflight.Check` 准入。
 - 只有 `ConfirmSettlement` 核验且成功落库后，官方响应才包含 `success=true` 和原 txid/network/payer/amount。缺失固化证据在预算内轮询；预算耗尽、广播未知或核验节点暂不可用，以携带原 txid 的官方 `settlement_pending` 错误返回。提交状态不明时返回 `settlement_recovery_required`，先读回日志；都不能据此释放占用、重签已保存交易或创建新付款。
-- 官方资源服务端仅对带原 txid 的 pending **原样自动重试一次**，不是无限轮询。机制自身负责有界等待。远程 facilitator 客户端、反向代理及 HTTP 服务超时应覆盖整轮机制预算；现有资源服务端示例的15秒远程调用超时可能先中断等待，下一步提供配套 facilitator HTTP 启动示例。中断后仍须用相同付款载荷恢复，不能重新授权付款。
+- 官方资源服务端仅对带原 txid 的 pending **原样自动重试一次**，不是无限轮询。机制自身负责有界等待，配套 HTTP 示例已匹配远程/中间件/写超时；反向代理和调用方也需覆盖预算。中断后仍须用相同付款载荷恢复，不能重新授权付款。
 
 外部签名期间占用一条数据库连接及行锁，应配置短签名超时和合理连接池。崩溃发生在签名后、保存提交前时，本库从未广播那些未提交字节，后续可能再次调用签名器；**不保证 HSM 调用恰好一次**。所有实例必须共享同一日志并遵循本流程。单笔金额/费用上限不是累计代付预算，公开端点还需身份认证、限流和费用预算；运营方仍须独立核验部署、资产语义、费用资源和账户权限。
 
@@ -248,14 +280,14 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 
 ```bash
 go mod verify
-go vet . ./exact ./exact/postgres ./examples/client ./examples/server
-go test -race -count=1 -cover . ./exact ./exact/postgres ./examples/client ./examples/server
-go build . ./exact ./exact/postgres ./examples/client ./examples/server
+go vet . ./exact ./exact/postgres ./examples/client ./examples/server ./examples/facilitator
+go test -race -count=1 -cover . ./exact ./exact/postgres ./examples/client ./examples/server ./examples/facilitator
+go build . ./exact ./exact/postgres ./examples/client ./examples/server ./examples/facilitator
 ```
 
 PostgreSQL 集成测试要求 `X402_TEST_DATABASE_URL` 指向专用测试库，并授予创建临时 schema 的权限。每个用例使用独立随机 schema，结束后仅清理自己的 schema；未设置时明确跳过数据库测试，不能当作集成验证通过。CI 配置临时 PostgreSQL 16 并实际执行这些测试。
 
-测试覆盖地址、网络、TronWeb 编码/签名对照、授权/费用/时间边界、模拟节点和 PostgreSQL 并发恢复。固化核验覆盖历史过期交易、完整原始字节/块内归属、执行状态、头/块不一致、精确事件/重复和回转、嵌套重复 JSON、网络/超时/并发；恢复与持久化覆盖升级回滚、约束、冲突结果、迟到回调、SQL 失败和实际提交后响应丢失。facilitator 覆盖官方 SDK 注册/Verify/独立 Settle、动态临时签名、16并发单次签名/广播、过期及已消费 nonce 的历史恢复、pending/节点故障和未提交字节不广播。所有回执和区块均为合成夹具，没有真实链上测试。后续补 facilitator HTTP 启动示例、部署预检与 Nile 闭环，再整理预发布供支付网关引用。
+测试覆盖地址、网络、TronWeb 编码/签名对照、授权/费用/时间边界、模拟节点和 PostgreSQL 并发恢复。固化核验覆盖历史过期交易、完整原始字节/块内归属、执行状态、头/块不一致、精确事件/重复和回转、嵌套重复 JSON、网络/超时/并发；恢复与持久化覆盖升级回滚、约束、冲突结果、迟到回调、SQL 失败和实际提交后响应丢失。facilitator 覆盖官方 SDK、HTTP鉴权/输入/容量/错误脱敏、动态临时签名、16并发单次签名/广播、过期及已消费 nonce 的历史恢复、pending/节点故障和未提交字节不广播。所有回执和区块均为合成夹具，没有真实链上测试。下一步核验真实部署并完成 Nile 闭环/中断恢复和从零接入验证，再整理预发布供支付网关引用。
 
 ## 参考与发布状态
 

@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -41,15 +43,14 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	facilitatorURL := os.Getenv("X402_FACILITATOR_URL")
-	endpoint, err := url.Parse(facilitatorURL)
-	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" {
-		return errors.New("必须显式配置可信 HTTPS facilitator URL，且不含凭据、query 或 fragment")
+	allowLocal := os.Getenv("X402_ALLOW_INSECURE_LOCAL_FACILITATOR_HTTP")
+	if allowLocal != "" && allowLocal != "false" && allowLocal != "true" {
+		return errors.New("本机 HTTP 开关无效")
 	}
-	facilitator := x402http.NewHTTPFacilitatorClient(&x402http.FacilitatorConfig{
-		URL:        facilitatorURL,
-		HTTPClient: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-	})
+	facilitator, err := remoteFacilitator(os.Getenv("X402_FACILITATOR_URL"), os.Getenv("X402_FACILITATOR_TOKEN"), allowLocal == "true")
+	if err != nil {
+		return err
+	}
 	startup, cancel := context.WithTimeout(ctx, 30*time.Second)
 	handler, err := buildHandler(startup, mechanism, facilitator, payTo, os.Getenv("X402_PRICE_ATOMIC"), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// upfront 已通过可信 facilitator 结算；真实应用仍须防止同一付款重复履约。
@@ -66,7 +67,7 @@ func run(ctx context.Context) error {
 	}
 	server := &http.Server{
 		Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout: 15 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10,
+		ReadTimeout: 15 * time.Second, WriteTimeout: 420 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10,
 	}
 	result := make(chan error, 1)
 	go func() { result <- server.ListenAndServe() }()
@@ -116,5 +117,44 @@ func buildHandler(ctx context.Context, mechanism *exact.Server, facilitator x402
 		}
 		resource.ServeHTTP(w, r)
 	}))
-	return nethttp.PaymentMiddlewareFromHTTPServer(httpServer, nethttp.WithSyncFacilitatorOnStart(false), nethttp.WithTimeout(25*time.Second))(mux), nil
+	// 单次远程预算200秒，覆盖机制最多180秒；官方 pending 仅原样再试一次。
+	return nethttp.PaymentMiddlewareFromHTTPServer(httpServer, nethttp.WithSyncFacilitatorOnStart(false), nethttp.WithTimeout(410*time.Second))(mux), nil
+}
+
+func remoteFacilitator(address, token string, allowLocal bool) (*x402http.HTTPFacilitatorClient, error) {
+	endpoint, err := url.Parse(address)
+	if err != nil || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" {
+		return nil, errors.New("可信 facilitator URL 无效")
+	}
+	ip := net.ParseIP(endpoint.Hostname())
+	localHTTP := allowLocal && endpoint.Scheme == "http" && ip != nil && ip.IsLoopback()
+	if endpoint.Scheme != "https" && !localHTTP {
+		return nil, errors.New("facilitator 必须使用 HTTPS；明文仅允许显式开启的本机 IP")
+	}
+	var auth x402http.AuthProvider
+	if token != "" {
+		if len(token) < 32 || len(token) > 256 {
+			return nil, errors.New("facilitator 令牌格式无效")
+		}
+		for _, char := range []byte(token) {
+			if char < 33 || char > 126 {
+				return nil, errors.New("facilitator 令牌格式无效")
+			}
+		}
+		auth = bearerAuth{token: token}
+	}
+	return x402http.NewHTTPFacilitatorClient(&x402http.FacilitatorConfig{
+		URL: strings.TrimRight(address, "/"), AuthProvider: auth,
+		HTTPClient: &http.Client{Timeout: 200 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+	}), nil
+}
+
+type bearerAuth struct{ token string }
+
+func (auth bearerAuth) GetAuthHeaders(ctx context.Context) (x402http.AuthHeaders, error) {
+	if err := ctx.Err(); err != nil {
+		return x402http.AuthHeaders{}, err
+	}
+	header := func() map[string]string { return map[string]string{"Authorization": "Bearer " + auth.token} }
+	return x402http.AuthHeaders{Supported: header(), Verify: header(), Settle: header()}, nil
 }

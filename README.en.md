@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Provides official client, resource-server and PostgreSQL facilitator mechanisms, authorization/preflight, transaction construction/broadcast, solidified exact-payment checks and durable recovery. **The facilitator HTTP runnable example and a real testnet round trip are not complete. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
+An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Provides official mechanisms for all three roles, a runnable facilitator HTTP example, authorization/preflight, transaction construction/broadcast, solidified exact-payment checks and durable recovery. **A real testnet round trip is not complete. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
 
 ## Integration status
 
@@ -10,7 +10,7 @@ An independent TRON adapter SDK for x402: clients/agents, API resource servers a
 | --- | --- |
 | Client / agent | Implements official `SchemeNetworkClient`; configure signing/payment policy and use the official HTTP client for 402 retries |
 | API resource server | Implements official `SchemeNetworkServer`, Permit2 quotes and an `upfront` middleware example; requires a trusted facilitator, not just offline verification |
-| Self-hosted facilitator | Implements official `SchemeNetworkFacilitator`: preflight, controlled signing/broadcast, bounded confirmation and original-transaction recovery; HTTP runnable example and real testnet acceptance pending |
+| Self-hosted facilitator | Official mechanism and authenticated, concurrency-bounded HTTP example: preflight, controlled signing/broadcast, bounded confirmation and original-transaction recovery; real testnet acceptance pending |
 
 Ordinary clients do not need PostgreSQL or gateway merchant/ledger modules. PostgreSQL is an optional durable storage implementation for self-hosted facilitators. Trusted contracts, asset/recipient policy, wallet signing, gas and necessary Permit2 token approval remain prerequisites; no implicit approval or on-chain action.
 
@@ -79,11 +79,43 @@ The runnable [server example](examples/server/main.go) uses official net/http mi
 | `X402_PAY_TO` | Required merchant recipient |
 | `X402_PRICE_ATOMIC` | Required positive atomic-unit price |
 | `X402_FACILITATOR_URL` | Required trusted HTTPS base URL; no userinfo/query/fragment |
+| `X402_FACILITATOR_TOKEN` | Required for this project's service; official `AuthProvider` sends Bearer to all three endpoints; optional for unauthenticated third-party services |
+| `X402_ALLOW_INSECURE_LOCAL_FACILITATOR_HTTP` | Off by default; explicit `true` allows HTTP only to literal loopback IPs, not `localhost` or public addresses |
 | `X402_LISTEN_ADDR` | Defaults to `127.0.0.1:8080` |
 
 Explicit initialization and quote validation happen before listening; failures stop startup. `GET /resource` returns 402 without payment. HEAD is rejected to prevent Go GET-route HEAD matching from bypassing payment. Includes bounded startup/settlement/HTTP timeouts, no upstream redirects, bounded headers and graceful shutdown. External deployment needs TLS ingress and appropriate authentication. Use official `AuthProvider` for facilitator credentials, never URL tokens.
 
-**No facilitator HTTP service has passed real testnet acceptance yet.** The PostgreSQL mechanism can be registered with the official SDK; its HTTP runnable example remains pending. Configure a separately verified service for the resource-server example; no public address is assumed. Resource-server gating tests use a test-only facilitator; mechanism tests use the real implementation with simulated chain nodes. Neither constitutes on-chain acceptance.
+Remote requests have a 200-second budget covering the mechanism's maximum 180 seconds. Middleware allows 410 seconds and HTTP writes 420 seconds, covering one official identical-payload pending retry. Startup discovery remains bounded to 30 seconds. Match proxy/caller budgets too; timeout does not authorize another payment.
+
+**No real testnet acceptance is claimed.** The self-hosted example below is available, but contracts/nodes must be independently provisioned and verified; no public facilitator address is assumed. Resource-server gating tests use a test-only facilitator; HTTP settlement tests use the real mechanism and PostgreSQL with simulated chain nodes, not live-chain acceptance.
+
+## Self-hosted facilitator HTTP example
+
+`postgres.NewHTTPHandler(mechanism, postgres.HTTPConfig{BearerToken: token, MaxConcurrent: 8})` registers the official SDK core and exposes `GET /supported`, `POST /verify`, `POST /settle`. All endpoints require a 32–256-byte non-whitespace ASCII Bearer token. JSON is limited to 64 KiB; duplicate/ambiguous keys, unknown envelope fields, trailing values and non-v2 requests are rejected. Concurrent verification/settlement defaults to 8 (configurable 1–64). Excess requests receive 503 without signing/broadcasting. This is a per-process concurrency limit, not an aggregate expense budget.
+
+The [runnable example](examples/facilitator/main.go) targets Linux/macOS, allows only Nile/Shasta and literal loopback listeners, and **rejects mainnet/public binding**. Configure these variables and run `go run ./examples/facilitator`:
+
+| Variable | Meaning |
+| --- | --- |
+| `X402_NETWORK` | Defaults to Nile; Shasta also allowed |
+| `X402_DATABASE_URL` | Required isolated journal database; trusted `search_path`, least-privilege runtime role, TLS for remote connections |
+| `X402_EXECUTOR_KEY_FILE` | Required absolute path; service-user-owned 0400/0600 regular file containing 64 hex characters, optionally one newline; final-component symlinks rejected |
+| `X402_FACILITATOR_TOKEN` | Required, matching the resource server; inject through deployment environment, never source, URL or logs |
+| `X402_PERMIT2_ADDRESS` / `X402_PROXY_ADDRESS` | Required independently verified deployments; no default addresses |
+| `X402_PERMIT2_CODE_HASH` / `X402_PROXY_CODE_HASH` | Required trusted runtime-bytecode Keccak-256 hashes, `0x` plus 32 bytes |
+| `X402_JSON_RPC_URL` | Required trusted HTTPS JSON-RPC endpoint |
+| `X402_NATIVE_NODE_URL` / `X402_GENESIS_BLOCK_ID` | Required HTTPS native-node root URL and independently verified full genesis block ID; wallet/walletsolidity routes required |
+| `X402_NODE_API_KEY` | Optional service credential for these nodes, never request-supplied |
+| `X402_ASSET` / `X402_PAY_TO` / `X402_MAX_AMOUNT_ATOMIC` | Required fixed token/recipient/per-payment cap; positive atomic-unit integer cap |
+| `X402_FEE_LIMIT_SUN` | Required positive per-transaction fee cap, **not** an aggregate gas budget |
+| `X402_SETTLEMENT_TIMEOUT` | Defaults to `90s`, accepts 1 second–3 minutes; original transaction lifetime is fixed at 60 seconds; already-submitted transactions remain recoverable |
+| `X402_MAX_CONCURRENT` / `X402_FACILITATOR_LISTEN_ADDR` | Defaults to 8 / `127.0.0.1:8081` |
+
+Administrators explicitly apply [schema.sql](exact/postgres/schema.sql) using a separate migration role; existing tables need the upgrade described below. Do not put database URLs/passwords in command-line arguments. Runtime roles should lack DDL, DELETE and TRUNCATE privileges. Startup checks configuration, database connectivity and readability of current-version columns. It **does not create/migrate tables, exhaustively inspect constraints, check live deployments, sign, approve or submit payments**. This is not full deployment acceptance: verify the complete schema, executor default-owner permissions/TRX/energy, token semantics and payer Permit2 allowance independently.
+
+For local resource-server integration set `X402_FACILITATOR_URL=http://127.0.0.1:8081`, the matching token and `X402_ALLOW_INSECURE_LOCAL_FACILITATOR_HTTP=true`, then run `go run ./examples/server`. Cross-machine deployments require trusted TLS ingress forwarding to loopback, ingress rate limits and aggregate expense budgets. The key stays in process memory and is cleared best-effort on shutdown, not HSM/MPC security. SDK integrations can supply an external `FacilitatorConfig.Signer`. The example loads only the explicitly configured key file, without discovering or modifying existing wallets.
+
+Responses follow official formats. Unknown/unconfirmed results remain unsuccessful; HTTP failures preserve `settlement_pending` and the original txid for identical-payload recovery. Disconnect/503 is not proof of payment failure: never generate a replacement authorization. SIGTERM drains accepted requests; interrupted work recovers from the same journal, without automatic background executors or rebroadcast.
 
 Upfront payment is not automatically refunded if the handler later fails; do not settle again. Applications need fulfillment idempotency, lookup and compensation. New upfront quotes require the updated client; existing no-paymentFlow quotes/signatures remain compatible. The digest does not bind paymentFlow; the verifier and official server compare accepted terms with the trusted quote to prevent stripping/downgrading it.
 
@@ -164,7 +196,7 @@ A successful check normally makes nine sequential read-only requests, without re
 
 After restart, `exact.RestoreSettlement(config, executorAddress, originalTransaction)` recovers a `PreparedSettlement` solely from the persisted original signed transaction. Configuration and fee-paying executor must be trusted deployment inputs. It strictly decodes this package's fixed Protobuf/ABI, checks byte-for-byte canonical re-encoding, verifies the payer's TIP-712 signature, executor's transaction signature and original txid. Authorization fields come from the original call, not an auxiliary snapshot or current quote. No `Build`, forged current time for expired authorization, validity extension, signing or broadcasting. TAPOS bytes are not a complete reference-block proof; recovery does not prove the original quote, preflight or successful payment.
 
-Compare `prepared.Authorization()` with the original trusted journal identity before calling the read-only solidified checker. Only the package's fixed single-contract, single-EOA-signature canonical encoding is accepted; other valid TRON transactions may be rejected. This is not a generic transaction importer. `ConfirmSettlement` below combines recovery, checking and durable success and is used by the facilitator mechanism. HTTP deployment and real testnet acceptance remain pending; simulated tests are not deployment acceptance.
+Compare `prepared.Authorization()` with the original trusted journal identity before calling the read-only solidified checker. Only the package's fixed single-contract, single-EOA-signature canonical encoding is accepted; other valid TRON transactions may be rejected. This is not a generic transaction importer. `ConfirmSettlement` below combines recovery, checking and durable success and is used by the facilitator and its HTTP example. Real testnet acceptance remains pending; simulated tests are not deployment acceptance.
 
 ## Durable settlement journal (optional PostgreSQL)
 
@@ -206,7 +238,7 @@ Supply trusted `FacilitatorConfig` values explicitly:
 - `Settle` does not depend on a preceding `Verify`. New payments pass signature/policy/time/on-chain checks, then reserve the journal. A row-locked transaction rechecks state, constructs, signs and commits the unique original transaction before broadcasting. Preflight, broadcast and finality waiting run outside that transaction; competing instances reconcile the winner rather than create another payment.
 - Existing unknown/pending/succeeded authorizations match trusted requirements, signatures and durable identity, then recover the original transaction. They do not rerun current-validity admission or query already-consumed nonces. `VerifyAuthorizationBinding` is historical identification only, never a replacement for fresh `VerifyAuthorization`/`Preflight.Check` admission.
 - Only successful `ConfirmSettlement` persistence permits the official `success=true` response with original txid/network/payer/amount. Missing solidified evidence is polled within the budget. Timeout, unknown broadcast or unavailable verification nodes return official `settlement_pending` with the original txid. Ambiguous persistence returns `settlement_recovery_required` and requires journal readback; neither outcome permits reservation release, re-signing saved transactions or another payment.
-- The official resource server retries pending with an original txid **once using identical bytes**, not indefinitely. The mechanism owns bounded waiting. Remote facilitator clients, proxies and HTTP servers must allow the full mechanism budget; the existing resource-server example's 15-second remote timeout may interrupt it first. A matching facilitator HTTP runnable example is next. After interruption, recover with the same payment payload rather than authorizing a new payment.
+- The official resource server retries pending with an original txid **once using identical bytes**, not indefinitely. The mechanism owns bounded waiting. The paired HTTP examples align remote/middleware/write timeouts; proxies and callers must match the budget too. After interruption, recover with the same payment payload rather than authorizing a new payment.
 
 External signing holds one database connection and a row lock: use short signing deadlines and size pools appropriately. A crash after signing but before save commit may cause a later signer invocation; uncommitted bytes were never broadcast by this library. **Exactly-once HSM invocation is not guaranteed.** Cooperating instances must share the journal and follow this workflow. Per-payment/fee caps are not aggregate sponsorship budgets. Public endpoints still require authentication, rate limits and expense budgets; independently verify deployments, token semantics, gas resources and account permissions.
 
@@ -216,16 +248,16 @@ Requires Go 1.26+. CI uses 1.26.x. No release exists; public APIs may change.
 
 ```bash
 go mod verify
-go vet . ./exact ./exact/postgres ./examples/client ./examples/server
-go test -race -count=1 -cover . ./exact ./exact/postgres ./examples/client ./examples/server
-go build . ./exact ./exact/postgres ./examples/client ./examples/server
+go vet . ./exact ./exact/postgres ./examples/client ./examples/server ./examples/facilitator
+go test -race -count=1 -cover . ./exact ./exact/postgres ./examples/client ./examples/server ./examples/facilitator
+go build . ./exact ./exact/postgres ./examples/client ./examples/server ./examples/facilitator
 ```
 
 Inputs are strict: no whitespace trimming, unknown networks, wildcards, or decimal leading zeros. Namespace must be `tron`; legacy hexadecimal references are case-insensitive. Addresses must be 34-character Base58Check or 42-character `41`-prefixed hex. Arbitrary `0x` addresses are not accepted as TRON input. Formatting is not authorization verification.
 
 Database tests require `X402_TEST_DATABASE_URL` pointing to a dedicated PostgreSQL database with permission to create temporary schemas. Each test creates and cleans only its own random schema. Without this variable integration tests explicitly skip; this is not a passing database acceptance run. CI provisions PostgreSQL 16 and runs them.
 
-Tests cover public TronWeb vectors, tampering, amount/fee/time boundaries, simulated nodes and PostgreSQL concurrency/recovery. Solidified checks cover original bytes/block membership, execution, changed heads/blocks, exact/duplicate/reversed events, malformed JSON and network/timeouts. Recovery/persistence cover upgrades/rollback, constraints, conflicting evidence, delayed callbacks, SQL failure and lost responses after actual commit. Facilitator tests cover official SDK registration/Verify/independent Settle, dynamic ephemeral signatures,16 concurrent calls with single signing/broadcast, expired/consumed-nonce recovery, pending/node failures and never broadcasting uncommitted bytes. Receipts/blocks are synthetic; no live-chain acceptance is claimed. Next: the facilitator HTTP runnable example, deployment checks and a Nile round trip, then prerelease packaging before gateway integration.
+Tests cover public TronWeb vectors, tampering, amount/fee/time boundaries, simulated nodes and PostgreSQL concurrency/recovery. Solidified checks cover original bytes/block membership, execution, changed heads/blocks, exact/duplicate/reversed events, malformed JSON and network/timeouts. Recovery/persistence cover upgrades/rollback, constraints, conflicting evidence, delayed callbacks, SQL failure and lost responses after actual commit. Facilitator tests cover official SDK/HTTP authentication, input/capacity/error redaction, dynamic ephemeral signatures, 16 concurrent calls with single signing/broadcast, expired/consumed-nonce recovery, pending/node failures and never broadcasting uncommitted bytes. Receipts/blocks are synthetic; no live-chain acceptance is claimed. Next: verify real deployments and complete a Nile round trip/interruption recovery and clean-room integration, then prerelease packaging before gateway integration.
 
 ## References and status
 

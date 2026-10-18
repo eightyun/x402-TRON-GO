@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"github.com/eightyun/x402-tron-go/exact"
 )
 
@@ -74,5 +75,41 @@ func TestEOASignerValidationAndClose(t *testing.T) {
 	wg.Wait()
 	if signature, err := signer.SignAuthorization(context.Background(), [32]byte{}); signature != nil || !errors.Is(err, exact.ErrEOASigner) || strings.Contains(err.Error(), "private") {
 		t.Fatal("关闭后仍可签名")
+	}
+}
+
+func TestEOASignerTransactionDigest(t *testing.T) {
+	t.Parallel()
+	key, err := secp256k1.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer key.Zero()
+	encoded := key.Serialize()
+	signer, err := exact.NewEOASigner(encoded)
+	clear(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer signer.Close()
+	digest := [32]byte{1, 2, 3}
+	signature, err := signer.SignTransaction(context.Background(), digest)
+	if err != nil || len(signature) != 65 {
+		t.Fatal("交易签名失败")
+	}
+	compact := append([]byte{signature[64]}, signature[:64]...)
+	pubkey, _, err := ecdsa.RecoverCompact(compact, digest[:])
+	if err != nil || !pubkey.IsEqual(key.PubKey()) {
+		t.Fatal("签名并非指定原始 SHA-256 摘要")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := signer.SignTransaction(ctx, digest); !errors.Is(err, context.Canceled) {
+		t.Fatal("交易签名不遵守取消")
+	}
+	for _, bad := range []*exact.EOASigner{nil, {}} {
+		if _, err := bad.SignTransaction(context.Background(), digest); !errors.Is(err, exact.ErrEOASigner) {
+			t.Fatal("空签名器未拒绝")
+		}
 	}
 }
