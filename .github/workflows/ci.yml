@@ -71,3 +71,10 @@ jobs:
       - name: Verify offline bidirectional upstream SDK interoperability
         working-directory: interop/bankofai
         run: npm test
+      - name: Build and verify unreleased Linux testnet bundle
+        shell: bash
+        run: |
+          go run ./tools/package -targets linux/amd64 -output "${RUNNER_TEMP}/x402-testnet-packages"
+          revision="$(git rev-parse --short=12 HEAD)"
+          cd "${RUNNER_TEMP}/x402-testnet-packages/x402-tron-go-${revision}"
+          sha256sum -c SHA256SUMS
