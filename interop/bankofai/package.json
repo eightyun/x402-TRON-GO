@@ -1,0 +1,16 @@
+{
+  "name": "x402-tron-go-bankofai-interop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test interop.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@bankofai/x402-core": "1.1.1",
+    "@bankofai/x402-tron": "1.2.0",
+    "tronweb": "6.3.0"
+  }
+}

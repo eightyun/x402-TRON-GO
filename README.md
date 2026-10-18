@@ -14,6 +14,8 @@
 
 普通客户端不需要 PostgreSQL，不加载支付网关的商户/账本模块。数据库只是自建 facilitator 可选的持久化实现。网络、资产与收款策略、钱包签名、Gas 和必要的 Permit2 代币授权仍是接入前置条件；不自动授权或隐式上链。
 
+**互操作边界：** 已用实际发布的 `@bankofai/x402-tron@1.2.0` / `@bankofai/x402-core@1.1.1` 完成离线双向授权测试，但该版本只配置旧十六进制网络标识（例如 Nile 为 `tron:0xcd8690dc`），不能直接处理本项目默认的十进制报价。Go 机制接受这些已知别名，官方 core 的注册键仍须与报价一致；这不是默认资源示例与该版本完整 HTTP 互通的证明。详见下方验证范围；未改写上游包或放宽签名校验来隐藏差异。
+
 ## 客户端快速体验
 
 要求 Go 1.26 或更高；尚未发布稳定版本。克隆仓库后运行：
@@ -286,6 +288,22 @@ go build . ./exact ./exact/postgres ./examples/client ./examples/server ./exampl
 ```
 
 PostgreSQL 集成测试要求 `X402_TEST_DATABASE_URL` 指向专用测试库，并授予创建临时 schema 的权限。每个用例使用独立随机 schema，结束后仅清理自己的 schema；未设置时明确跳过数据库测试，不能当作集成验证通过。CI 配置临时 PostgreSQL 16 并实际执行这些测试。
+
+### 上游 TRON SDK 双向互操作
+
+[互操作测试](interop/bankofai/interop.test.mjs) 使用上游实际发布包的公开 core/client/facilitator，而非复制其算法或只比较JSON字段。Go通过本项目公开客户端/官方core生成授权，反向由上游core/facilitator验证；签名均为真实密码学校验。Nile/Shasta覆盖旧版extra和upfront、签名/金额/收款人/代理/nonce/时效/网络篡改，以及Go可信域/accepted绑定。
+
+仅该可选测试需要 Node.js 22+（CI使用24.x）和npm，不改变Go运行依赖。先显式准备Go模块缓存，然后运行：
+
+```bash
+go mod download
+npm --prefix interop/bankofai ci --ignore-scripts --no-audit --no-fund
+npm --prefix interop/bankofai test
+```
+
+依赖版本和tarball integrity完整锁定；测试期间Node进程禁网，Go子工具禁止自动下载模块。付款人均临时随机生成、无既有资金/私钥输入，签名只经内存管道传递，不打印。上游客户端保留资产白名单/单笔限额，无自动approval；facilitator的余额/allowance是明确的模拟状态，未提供写交易能力。**这证明授权互通，不证明链上结算。**
+
+上游1.2.0的实际网络常量为 `tron:0xcd8690dc` / `tron:0x94a9059e`。互操作测试按其真实报价注册相同网络键，不将其十六进制键偷偷改成十进制，也不修改SDK常量。项目默认仍输出规范十进制；源码较新的网络别名支持不能推断为该发布包已支持。测试单独验证其拒绝十进制报价，未宣称所有上游版本/默认HTTP流程可互通。实际对接须先统一报价/能力发现/注册的网络profile并验证具体版本。
 
 测试覆盖地址、网络、TronWeb 编码/签名对照、授权/费用/时间边界、模拟节点和 PostgreSQL 并发恢复。固化核验覆盖历史过期交易、完整原始字节/块内归属、执行状态、头/块不一致、精确事件/重复和回转、嵌套重复 JSON、网络/超时/并发；恢复与持久化覆盖升级回滚、约束、冲突结果、迟到回调、SQL 失败和实际提交后响应丢失。facilitator 覆盖官方 SDK、HTTP鉴权/输入/容量/错误脱敏、动态临时签名、16并发单次签名/广播、过期及已消费 nonce 的历史恢复、pending/节点故障和未提交字节不广播。所有回执和区块均为合成夹具，没有真实链上测试。下一步核验真实部署并完成 Nile 闭环/中断恢复和从零接入验证，再整理预发布供支付网关引用。
 

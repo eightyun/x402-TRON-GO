@@ -14,6 +14,8 @@ An independent TRON adapter SDK for x402: clients/agents, API resource servers a
 
 Ordinary clients do not need PostgreSQL or gateway merchant/ledger modules. PostgreSQL is an optional durable storage implementation for self-hosted facilitators. Trusted contracts, asset/recipient policy, wallet signing, gas and necessary Permit2 token approval remain prerequisites; no implicit approval or on-chain action.
 
+**Interoperability boundary:** offline bidirectional authorization tests use the actual published `@bankofai/x402-tron@1.2.0` / `@bankofai/x402-core@1.1.1`. That release configures only legacy hexadecimal network IDs (for example Nile `tron:0xcd8690dc`), not this project's default decimal quotes. The Go mechanism accepts known aliases, but official-core registration keys must still match the quote. This does not establish complete HTTP interoperability between default examples and that release. Tests do not patch upstream constants or weaken signature checks to hide the difference.
+
 ## Client quick start
 
 Requires Go 1.26+. No stable release yet. From a clone:
@@ -256,6 +258,22 @@ go build . ./exact ./exact/postgres ./examples/client ./examples/server ./exampl
 Inputs are strict: no whitespace trimming, unknown networks, wildcards, or decimal leading zeros. Namespace must be `tron`; legacy hexadecimal references are case-insensitive. Addresses must be 34-character Base58Check or 42-character `41`-prefixed hex. Arbitrary `0x` addresses are not accepted as TRON input. Formatting is not authorization verification.
 
 Database tests require `X402_TEST_DATABASE_URL` pointing to a dedicated PostgreSQL database with permission to create temporary schemas. Each test creates and cleans only its own random schema. Without this variable integration tests explicitly skip; this is not a passing database acceptance run. CI provisions PostgreSQL 16 and runs them.
+
+### Bidirectional upstream TRON SDK interoperability
+
+The [interop suite](interop/bankofai/interop.test.mjs) calls public core/client/facilitator APIs from actual published upstream packages rather than copying their algorithms or merely comparing JSON. Go uses this project's public client and the official Go core; the reverse direction uses upstream core/facilitator with real cryptographic signature verification. Nile/Shasta cover legacy extra and upfront, signature/amount/recipient/proxy/nonce/time/network tampering, and Go's trusted-domain/accepted bindings.
+
+Only this optional suite needs Node.js 22+ (CI uses 24.x) and npm; Go runtime dependencies are unchanged. Explicitly prepare the Go module cache first:
+
+```bash
+go mod download
+npm --prefix interop/bankofai ci --ignore-scripts --no-audit --no-fund
+npm --prefix interop/bankofai test
+```
+
+Versions and complete tarball integrity are locked. During tests Node network access is blocked and the Go helper cannot download modules. Payers are random ephemeral keys, with no existing-wallet/funds input; signatures travel through in-memory pipes, not logs. The upstream client retains explicit asset/per-payment spend controls, without automatic approval. Facilitator balance/allowance reads are explicitly simulated; no transaction-writing capability is provided. **This proves authorization interoperability, not on-chain settlement.**
+
+Upstream 1.2.0 actually uses `tron:0xcd8690dc` / `tron:0x94a9059e`. Tests register the same keys as its real quotes, without silently rewriting them to decimal or patching SDK constants. This project's default remains canonical decimal. Newer source-level alias support does not imply support in that published package. A separate test records rejection of decimal quotes; no all-version/default-HTTP compatibility is claimed. Align quote/discovery/registration network profiles and verify the exact counterpart version before integration.
 
 Tests cover public TronWeb vectors, tampering, amount/fee/time boundaries, simulated nodes and PostgreSQL concurrency/recovery. Solidified checks cover original bytes/block membership, execution, changed heads/blocks, exact/duplicate/reversed events, malformed JSON and network/timeouts. Recovery/persistence cover upgrades/rollback, constraints, conflicting evidence, delayed callbacks, SQL failure and lost responses after actual commit. Facilitator tests cover official SDK/HTTP authentication, input/capacity/error redaction, dynamic ephemeral signatures, 16 concurrent calls with single signing/broadcast, expired/consumed-nonce recovery, pending/node failures and never broadcasting uncommitted bytes. Receipts/blocks are synthetic; no live-chain acceptance is claimed. Next: verify real deployments and complete a Nile round trip/interruption recovery and clean-room integration, then prerelease packaging before gateway integration.
 

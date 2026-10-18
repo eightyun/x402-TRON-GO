@@ -8,6 +8,7 @@
 - golang.org/x/crypto v0.46.0、x/sys v0.40.0、x/sync v0.19.0、x/text v0.32.0 及 x/net v0.48.0：BSD-3-Clause，来源 https://go.googlesource.com/crypto/ 、https://go.googlesource.com/sys/ 、https://go.googlesource.com/sync/ 、https://go.googlesource.com/text/ 和 https://go.googlesource.com/net/ 。
 - gojsonschema v1.2.0、gojsonreference 与 gojsonpointer：官方 HTTP 中间件的间接依赖，Apache-2.0，来源 https://github.com/xeipuuv/gojsonschema 、https://github.com/xeipuuv/gojsonreference 和 https://github.com/xeipuuv/gojsonpointer 。
 - TronWeb 6.3.0：仅作为离线授权/结算交易向量生成、ABI/Protobuf 编码和验签工具，不是 Go 运行依赖；MIT，来源 https://github.com/tronprotocol/tronweb 。公开向量使用合成区块，不包含私钥。
+- `@bankofai/x402-tron` 1.2.0 和 `@bankofai/x402-core` 1.1.1：仅在 `interop/bankofai` 离线测试中调用实际发布包的公开接口，不是 Go 运行依赖。发布包声明 Apache-2.0，来源 https://www.npmjs.com/package/@bankofai/x402-tron/v/1.2.0 、https://www.npmjs.com/package/@bankofai/x402-core/v/1.1.1 及 https://github.com/BofAI/x402 。包版本及完整依赖 integrity 固定在测试锁文件；发布包不等同于下述源码快照，也不表示本项目获得官方背书。
 - BANK OF AI TRON mechanism，参考版本 e50e9f09149203a97e35110ee1cd64073487f30d：用于核对 wire 字段、签名域和二字段 witness。来源 https://github.com/BofAI/x402/tree/e50e9f09149203a97e35110ee1cd64073487f30d/typescript/packages/mechanisms/tron 。保留仓库级 MIT 声明如下；不表示对其所有软件或合约安全作出保证。
 
 MIT License
