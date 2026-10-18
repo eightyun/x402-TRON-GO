@@ -214,6 +214,23 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 
 **这不是完整部署或付款验收。** 代码哈希必须先从独立可信资料核验，不能将节点本次返回值直接当作期望哈希。代币只检查非空代码，未验证精度/转账语义；也未检查原生节点创世块/固化接口、完整 `settle` 模拟能力、账户权限或费用资源。部署结果不能传作付款成功证明，也不能取代逐笔 `CheckWithSimulation` 和固化到账核验。
 
+### 已复现的 Nile 合约构建
+
+2026-10-18 使用下列固定源码和编译器进行本地构建，仅按编译器 `immutableReferences` 链接已知构造参数；结果与 Nile `eth_getCode` **全字节一致，包含元数据**。不是仅比较 ABI、getter、长度或移除元数据后的代码，也不是直接采信节点哈希。
+
+| 项目 | Permit2 | exact 代理 |
+| --- | --- | --- |
+| 地址 | `TYQuuhGbEMxF7nZxUHV3uHJxAVVAegNU9h` | `TFGoaq2KjizijgjtkVxT7yjffW1A5T1j6F` |
+| 固定源码 | [SUN Permit2 67b1f91](https://github.com/sun-protocol/sunswap-permit2/tree/67b1f91662424416e50d05d734f9fd3856039cc5)（含仓库内 solmate） | [BofAI contracts 82aa2b2](https://github.com/BofAI/x402-contracts/tree/82aa2b2b761ebe61f08b4e6ae2558846c67ded47)，OpenZeppelin 5.6.1 |
+| 编译器 | solc `0.8.17+commit.8df45f5f` | solc `0.8.25+commit.b61c2a91` |
+| 参数 | optimizer 999999、viaIR、London | optimizer 999999、Cancun |
+| runtime 字节数 | 9193 | 3593 |
+| runtime Keccak-256 | `0xfdd5ad3c59a61e0d232cc5ec5fe684bbe3083990c0873441a6c928bb452a4705` | `0x45b702594297f3ce7ea10f4ff622608653dd3ce289445269686607ac1d5f626d` |
+
+两者均使用 `metadata.useLiteralContent=true`，对应 [部署插件的设置](https://github.com/sun-protocol/sunhat/blob/2efcfb61092024c69fb86f0568edc4be5c7798b7/src/index.ts#L326)。Permit2 的 immutable 按 Nile chain ID 和其地址计算签名域；代理链接上述 Permit2 地址。**使用的是表中可复现的标准 solc 构建，不是同版本号的 TRON fork 编译器**；后者生成的代理代码不匹配，不能混用。
+
+编译器 SHA-256：0.8.17 为 `617828e63be485c7cc2dbcbdd5a22b582b40fafaa41016ad595637b83c90656c`，0.8.25 为 `f8c9554471ff2db3843167dffb7a503293b5dc728c8305b044ef9fd37d626ca7`，对应 [Solidity 官方编译器索引](https://github.com/ethereum/solc-bin/blob/gh-pages/wasm/list.json)。这些是显式核验的参考配置，**不会自动填入 SDK 或示例**；不是主网配置、安全审计或真实付款证明。链头漂移等检查仍可能拒绝一轮预检，不能跳过。真实测试网付款和原交易恢复验收尚未完成。
+
 ## 受限结算交易构建与外部签名
 
 `exact.NewSettlementBuilder` 显式配置可信 `Authorization`、费用付款方 `ExecutorAddress`、正数 `FeeLimitSUN` 和 `Lifetime`（大于 15 秒、不超过 10 分钟、整毫秒）。无默认主网/合约配置，不持有私钥，不信任节点提供的任意交易 JSON。

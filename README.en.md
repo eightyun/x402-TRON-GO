@@ -180,6 +180,23 @@ The command has a 15-second total budget. Success emits structured network/asset
 
 **Not complete deployment or payment acceptance.** Verify expected hashes from independent trusted material first, not the node's current response. Token checks require only nonempty code, not decimals/transfer semantics. Native genesis/solidified endpoints, full `settle` simulation capability, account permissions and fee resources are not checked. This result cannot establish payment success or replace per-payment `CheckWithSimulation` and solidified receipt verification.
 
+### Reproduced Nile contract builds
+
+On 2026-10-18, local builds from the following pinned sources and compilers, linked only through compiler-declared `immutableReferences` using known constructor values, matched Nile `eth_getCode` **byte for byte, including metadata**. This is not merely an ABI/getter/length comparison, metadata-stripped comparison, or trust in a node-reported hash.
+
+| Item | Permit2 | exact proxy |
+| --- | --- | --- |
+| Address | `TYQuuhGbEMxF7nZxUHV3uHJxAVVAegNU9h` | `TFGoaq2KjizijgjtkVxT7yjffW1A5T1j6F` |
+| Pinned source | [SUN Permit2 67b1f91](https://github.com/sun-protocol/sunswap-permit2/tree/67b1f91662424416e50d05d734f9fd3856039cc5), including vendored solmate | [BofAI contracts 82aa2b2](https://github.com/BofAI/x402-contracts/tree/82aa2b2b761ebe61f08b4e6ae2558846c67ded47), OpenZeppelin 5.6.1 |
+| Compiler | solc `0.8.17+commit.8df45f5f` | solc `0.8.25+commit.b61c2a91` |
+| Settings | optimizer 999999, viaIR, London | optimizer 999999, Cancun |
+| Runtime bytes | 9193 | 3593 |
+| Runtime Keccak-256 | `0xfdd5ad3c59a61e0d232cc5ec5fe684bbe3083990c0873441a6c928bb452a4705` | `0x45b702594297f3ce7ea10f4ff622608653dd3ce289445269686607ac1d5f626d` |
+
+Both use `metadata.useLiteralContent=true`, matching the [deployment plugin setting](https://github.com/sun-protocol/sunhat/blob/2efcfb61092024c69fb86f0568edc4be5c7798b7/src/index.ts#L326). Permit2 immutables use the Nile chain ID and its address to derive the domain; the proxy links the Permit2 address above. **These are reproducible standard solc builds, not the same-numbered TRON fork compiler**: that fork produced a different proxy runtime and must not be substituted.
+
+Compiler SHA-256: 0.8.17 is `617828e63be485c7cc2dbcbdd5a22b582b40fafaa41016ad595637b83c90656c`; 0.8.25 is `f8c9554471ff2db3843167dffb7a503293b5dc728c8305b044ef9fd37d626ca7`, from the [official Solidity compiler index](https://github.com/ethereum/solc-bin/blob/gh-pages/wasm/list.json). These are explicitly checked reference settings, **not automatically selected SDK/example defaults**, Mainnet configuration, a security audit, or proof of payment. Head drift can still reject a preflight round and must not be bypassed. Real testnet payment and original-transaction recovery acceptance remain incomplete.
+
 ## Constrained settlement construction and external signing
 
 `exact.NewSettlementBuilder` requires trusted `Authorization`, an explicit gas-paying `ExecutorAddress`, positive `FeeLimitSUN`, and a whole-millisecond `Lifetime` greater than 15 seconds and at most 10 minutes. No default mainnet/contracts, private-key custody or arbitrary node-built transaction JSON.
