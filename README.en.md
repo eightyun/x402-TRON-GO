@@ -161,6 +161,25 @@ TRON [eth_call](https://developers.tron.network/reference/eth_call) and [eth_get
 
 HTTPS is required by default; redirects are blocked. API keys use only the `TRON-PRO-API-KEY` header. URLs cannot contain credentials, query or fragment. An optional `HTTPClient` supports trusted CA/proxy settings without in-place mutation. Explicit `AllowInsecureLocalHTTP` permits only loopback/localhost development nodes. Never derive node configuration from payment requests.
 
+## Wallet-free deployment checks
+
+The same `PreflightVerifier` offers `CheckDeployment(ctx, assetAddress, now)`. Without a payer, signature or valid quote, it checks the configured chain ID, fresh head, pinned Permit2/proxy runtime hashes, nonempty token code, `PERMIT2()`, two-field `WITNESS_TYPEHASH()` and `DOMAIN_SEPARATOR()`, then rechecks chain/head/freshness. A normal round uses 10 sequential read-only requests within the existing preflight budget, without automatic retries. It returns a `DeploymentResult`; existing payment verification and settlement remain unchanged.
+
+Set the following environment variables, then run the [deployment-check example](examples/deployment/main.go) with `go run ./examples/deployment`:
+
+| Variable | Meaning |
+| --- | --- |
+| `X402_NETWORK` | Defaults to Nile; only Nile/Shasta, rejecting Mainnet and its aliases |
+| `X402_JSON_RPC_URL` | Required trusted HTTPS JSON-RPC; no URL credentials, query or redirects |
+| `X402_PERMIT2_ADDRESS` / `X402_PROXY_ADDRESS` | Required independently verified deployment addresses; no defaults |
+| `X402_PERMIT2_CODE_HASH` / `X402_PROXY_CODE_HASH` | Required independently trusted runtime-bytecode Keccak-256 hashes; never learned automatically |
+| `X402_ASSET` | Required nonzero TRON token address, distinct from both configured contracts |
+| `X402_NODE_API_KEY` | Optional request-header credential, never printed |
+
+The command has a 15-second total budget. Success emits structured network/asset/checked contracts (`41`-prefixed hex), configured code hashes and head observations with `readOnly: true` and `paymentValidated: false`; failures exit nonzero with sanitized categories. No wallet loading, database connection, user-fund queries, authorization creation, `settle` simulation, token approval or broadcast.
+
+**Not complete deployment or payment acceptance.** Verify expected hashes from independent trusted material first, not the node's current response. Token checks require only nonempty code, not decimals/transfer semantics. Native genesis/solidified endpoints, full `settle` simulation capability, account permissions and fee resources are not checked. This result cannot establish payment success or replace per-payment `CheckWithSimulation` and solidified receipt verification.
+
 ## Constrained settlement construction and external signing
 
 `exact.NewSettlementBuilder` requires trusted `Authorization`, an explicit gas-paying `ExecutorAddress`, positive `FeeLimitSUN`, and a whole-millisecond `Lifetime` greater than 15 seconds and at most 10 minutes. No default mainnet/contracts, private-key custody or arbitrary node-built transaction JSON.

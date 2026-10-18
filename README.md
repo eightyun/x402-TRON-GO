@@ -195,6 +195,25 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 
 默认要求 HTTPS 并禁止重定向；API key 仅通过 `TRON-PRO-API-KEY` 头发送，节点 URL 不允许携带凭据、query 或 fragment。`HTTPClient` 可用于部署方可信 CA/代理配置，不会被原地修改；明文 HTTP 仅在显式启用 `AllowInsecureLocalHTTP` 后用于 loopback/localhost 测试节点。节点配置绝不能取自付款请求。
 
+## 无钱包部署检查
+
+同一 `PreflightVerifier` 提供 `CheckDeployment(ctx, assetAddress, now)`：无需付款人、签名或有效报价，即可检查配置的链 ID、鲜活链头、Permit2/代理代码哈希、代币非空代码、`PERMIT2()`、两字段 `WITNESS_TYPEHASH()` 和 `DOMAIN_SEPARATOR()`，最后再次核对链/头/新鲜度。正常10次串行只读请求，使用原预检总预算，不自动重试。返回 `DeploymentResult`，原付款预检和结算逻辑不变。
+
+可运行 [部署检查示例](examples/deployment/main.go)：显式设置下列环境变量，再执行 `go run ./examples/deployment`。
+
+| 变量 | 含义 |
+| --- | --- |
+| `X402_NETWORK` | 默认 Nile；仅允许 Nile/Shasta，拒绝主网及其别名 |
+| `X402_JSON_RPC_URL` | 必填，可信 HTTPS JSON-RPC；禁止 URL 凭据、query 和重定向 |
+| `X402_PERMIT2_ADDRESS` / `X402_PROXY_ADDRESS` | 必填，独立核验的部署地址，无默认值 |
+| `X402_PERMIT2_CODE_HASH` / `X402_PROXY_CODE_HASH` | 必填，独立可信的 runtime bytecode Keccak-256，无自动学习 |
+| `X402_ASSET` | 必填，待检查的非零 TRON 代币地址，不得为上述两个合约 |
+| `X402_NODE_API_KEY` | 可选，只放请求头，不输出 |
+
+命令总预算15秒；成功输出结构化网络/资产/被检查合约（`41` 前缀 hex）及配置代码哈希/观测头、`readOnly: true` 和 `paymentValidated: false`，失败非零退出并仅给脱敏分类。不会加载钱包、连接数据库、查询用户资金、生成授权、模拟 `settle`、批准代币授权或广播。
+
+**这不是完整部署或付款验收。** 代码哈希必须先从独立可信资料核验，不能将节点本次返回值直接当作期望哈希。代币只检查非空代码，未验证精度/转账语义；也未检查原生节点创世块/固化接口、完整 `settle` 模拟能力、账户权限或费用资源。部署结果不能传作付款成功证明，也不能取代逐笔 `CheckWithSimulation` 和固化到账核验。
+
 ## 受限结算交易构建与外部签名
 
 `exact.NewSettlementBuilder` 显式配置可信 `Authorization`、费用付款方 `ExecutorAddress`、正数 `FeeLimitSUN` 和 `Lifetime`（大于 15 秒、不超过 10 分钟、整毫秒）。无默认主网/合约配置，不持有私钥，不信任节点提供的任意交易 JSON。
