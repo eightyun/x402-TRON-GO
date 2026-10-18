@@ -2,7 +2,7 @@
 
 简体中文 | [English](README.en.md)
 
-面向 x402 的独立 TRON Go 适配 SDK，目标是让客户端/Agent、API 服务端和 facilitator 直接使用 TRON 支付，不必自行实现链适配，也不依赖我们的支付网关。当前已有官方三端机制、facilitator HTTP 启动示例，以及授权预检、交易构建/广播、固化精确到账核验和持久化恢复。**真实测试网闭环仍未完成，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
+面向 x402 的独立 TRON Go 适配 SDK，目标是让客户端/Agent、API 服务端和 facilitator 直接使用 TRON 支付，不必自行实现链适配，也不依赖我们的支付网关。当前已有官方三端机制、facilitator HTTP 启动示例，以及授权预检、交易构建/广播、固化精确到账核验和持久化恢复。**已完成单笔真实 Nile HTTP 付款及成功记录的跨进程恢复；仍是未审计的测试网开发版本，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
 
 ## 开箱即用进度
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 客户端 / Agent | 已实现官方 `SchemeNetworkClient`；配置付款策略和签名器，由官方 HTTP 客户端处理 402 与签名重试 |
 | API 资源服务端 | 已实现官方 `SchemeNetworkServer`、Permit2 报价与 `upfront` 中间件示例；仍需可信 facilitator，不能仅验签就发货 |
-| 自建 facilitator | 已实现官方机制和带鉴权/并发上限的 HTTP 启动示例，串联预检、受控签名/广播、有界确认与原交易恢复；待真实测试网验收 |
+| 自建 facilitator | 已实现官方机制和带鉴权/并发上限的 HTTP 启动示例，串联预检、受控签名/广播、有界确认与原交易恢复；单笔 Nile 实付及成功记录跨进程恢复已验证，完整部署/中断验收待完成 |
 
 普通客户端不需要 PostgreSQL，不加载支付网关的商户/账本模块。数据库只是自建 facilitator 可选的持久化实现。网络、资产与收款策略、钱包签名、Gas 和必要的 Permit2 代币授权仍是接入前置条件；不自动授权或隐式上链。
 
@@ -90,7 +90,17 @@ func paymentHTTPClient(contracts exact.Config, signer *exact.EOASigner, asset, p
 
 远程调用预算200秒，覆盖 facilitator 最多180秒的机制预算；中间件410秒、HTTP写超时420秒，允许官方对携带原 txid 的 pending 原样重试一次。启动能力发现仍限30秒；反向代理和调用方也需匹配预算。不要把超时解释成付款失败或创建新授权。
 
-**尚无真实测试网验收证明**。可使用下文自建 HTTP 示例，但必须独立准备/核验合约和节点，不默认使用公共 facilitator 地址。完整 HTTP 集成测试已串联真实客户端、资源中间件、鉴权 facilitator 和 PostgreSQL；区块链状态与回执仍为模拟夹具，不能视为链上验收。
+下文自建 HTTP 示例仍需独立准备/核验合约和节点，不默认使用公共 facilitator 地址。自动化 HTTP 集成测试使用模拟链状态/回执；另已完成下节记录的单笔真实 Nile 接入验证，**不等于这些可执行示例的从零部署或生产验收**。
+
+### 单笔 Nile 实链验证（2026-10-18）
+
+核心版本 `39b83a63fab27715306cf6fb273a9dd7184195e5`、Go 1.26.5、官方 Go SDK v2.28.0，使用下文已复现的 Permit2/代理、Nile 测试 USDT `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf`、独立付款/费用/收款地址与专用 PostgreSQL。一次性本地接入程序调用公开 SDK 和官方 HTTP 中间件，两个服务为 loopback TLS，节点与链上回执真实；没有修改核心实现或放宽预检。
+
+- 限额授权 0.003 测试 USDT 后，由真实 402 报价生成一份 0.001 测试 USDT 授权，完整模拟、保存唯一签名交易、单次广播、固化核验并落库后才返回 HTTP 200 付费资源。
+- 结算 [135dfb80…23efe5](https://nile.tronscan.org/#/transaction/135dfb80322290839444d93864f8190ae16cb0aadb1b9d9621110f96b823efe5)，固化块 `71933724`；核对唯一精确 Transfer 与双方余额变化。授权手续费 0、结算手续费 7.237 测试 TRX，仅代表本次实际费用。
+- 原进程正常结束后，新进程重放同一授权，从已有 `succeeded` 记录返回同一 txid；新增授权签名、交易签名和广播均为 0，原签名字节、余额及费用不变。**这是成功终态的跨进程恢复，不是待确认期间强制中断的实链演练**。
+
+本次没有运行完整可执行示例的从零部署、Shasta/主网、上游 SDK 端到端实付或长时稳定性验收，也不是独立安全审计。私钥、原始可扣款授权及本机运维材料不公开；不提供可直接照搬的生产资金配置。真实待确认中断恢复、干净环境接入与预发布仍待完成。
 
 ## 自建 facilitator HTTP 示例
 
@@ -231,7 +241,7 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 
 两者均使用 `metadata.useLiteralContent=true`，对应 [部署插件的设置](https://github.com/sun-protocol/sunhat/blob/2efcfb61092024c69fb86f0568edc4be5c7798b7/src/index.ts#L326)。Permit2 的 immutable 按 Nile chain ID 和其地址计算签名域；代理链接上述 Permit2 地址。**使用的是表中可复现的标准 solc 构建，不是同版本号的 TRON fork 编译器**；后者生成的代理代码不匹配，不能混用。
 
-编译器 SHA-256：0.8.17 为 `617828e63be485c7cc2dbcbdd5a22b582b40fafaa41016ad595637b83c90656c`，0.8.25 为 `f8c9554471ff2db3843167dffb7a503293b5dc728c8305b044ef9fd37d626ca7`，对应 [Solidity 官方编译器索引](https://github.com/ethereum/solc-bin/blob/gh-pages/wasm/list.json)。这些是显式核验的参考配置，**不会自动填入 SDK 或示例**；不是主网配置、安全审计或真实付款证明。链头漂移等检查仍可能拒绝一轮预检，不能跳过。真实测试网付款和原交易恢复验收尚未完成。
+编译器 SHA-256：0.8.17 为 `617828e63be485c7cc2dbcbdd5a22b582b40fafaa41016ad595637b83c90656c`，0.8.25 为 `f8c9554471ff2db3843167dffb7a503293b5dc728c8305b044ef9fd37d626ca7`，对应 [Solidity 官方编译器索引](https://github.com/ethereum/solc-bin/blob/gh-pages/wasm/list.json)。这些是显式核验的参考配置，**不会自动填入 SDK 或示例**；代码复现本身不是主网配置、安全审计或付款证明。链头漂移等检查仍可能拒绝一轮预检，不能跳过；单笔实付证据和未验证范围见前文。
 
 ## 受限结算交易构建与外部签名
 
@@ -252,7 +262,7 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 - `Broadcast(ctx, prepared, transaction, now)` 是低层单次写接口：必须先持久化并取得日志许可。它校验完整字节/签名/网络/剩余有效期，向**同一个原生节点**查询区块 0 并比较完整创世 ID，再发一次 `/wallet/broadcasthex`，最后复核网络。只有明确 `result=true`、成功 code（或兼容缺省）及原 txid 一致才表示本次受理；不是成功结算。网络读取用时计入广播前有效期检查。
 - `Lookup(ctx, txid)` 前后核对同节点创世 ID，查询 `/wallet/gettransactionbyid`，核对返回 txID 并重算 `SHA-256(raw_data_hex)`。返回 `TransactionObservation.Found`，**不代表成功执行、固化或收款到账**。只有空对象表示本次未找到；超时、歧义/重复顶层 JSON 字段、错误 hash 或网络不符都返回错误。未找到或请求被拒绝均不能据此释放占用、重签或另建付款。
 
-实际请求只有模拟节点测试覆盖，尚未运行真实 Nile 广播。节点受理、FullNode 主体、执行回执和固化付款事件是不同证据层次；前两个接口不判成功，需使用下面的只读交叉核验，也不提供恶意节点的状态证明。
+这些请求已用于上述单笔真实 Nile 结算，自动化测试仍使用模拟节点。节点受理、FullNode 主体、执行回执和固化付款事件是不同证据层次；前两个接口不判成功，需使用下面的只读交叉核验，也不提供恶意节点的状态证明。
 
 ## 原交易固化与付款事件核验
 
@@ -274,7 +284,7 @@ TRON 的 [eth_call](https://developers.tron.network/reference/eth_call) 和 [eth
 
 重启后可调用 `exact.RestoreSettlement(config, executorAddress, originalTransaction)`，仅从持久化的原签名交易恢复 `PreparedSettlement`。`config` 和费用付款方必须来自可信部署配置。严格解码本包固定的 Protobuf/ABI，重编码逐字节比对，并重新核对付款人的 TIP-712 签名、费用付款人的交易签名和原 txid；授权参数从原调用提取，不采信额外历史 JSON 或当前报价。恢复不调用 `Build`，不伪造当前时间验证过期授权，不续期、不签名、不广播。TAPOS 字节不等于完整参考块证明；恢复本身也不证明原报价、预检或到账成功。
 
-恢复后必须将 `prepared.Authorization()` 与原日志的可信授权标识完全比较，再调用只读固化核验。仅接受本包的单一合约调用、单一 EOA 签名和固定规范编码，其他合法 TRON 交易也可能拒绝；不是通用历史交易导入器。下面的 `ConfirmSettlement` 串联恢复、核验及成功持久化，facilitator 及 HTTP 示例均使用该流程；真实测试网验收仍待完成，不能把模拟测试当作上线验收。
+恢复后必须将 `prepared.Authorization()` 与原日志的可信授权标识完全比较，再调用只读固化核验。仅接受本包的单一合约调用、单一 EOA 签名和固定规范编码，其他合法 TRON 交易也可能拒绝；不是通用历史交易导入器。下面的 `ConfirmSettlement` 串联恢复、核验及成功持久化，facilitator 及 HTTP 示例均使用该流程；单笔实付不覆盖所有中断窗口，不能把模拟测试当作上线验收。
 
 ## 持久化结算日志（可选 PostgreSQL）
 
@@ -341,7 +351,7 @@ go test -race -count=1 ./exact/postgres -run '^TestHTTPAutomaticPaymentRoundTrip
 
 官方 HTTP 客户端从实际 402 报价调用 `exact.NewClient` 生成随机 nonce/真实签名，再经测试 TLS 资源服务和鉴权 facilitator 完成预检、完整模拟、日志保存、合成节点广播/固化核验、成功落库后交付。覆盖模拟拒绝零占用/付款/交付、超额报价签名前拒绝，以及 pending 不交付、原授权恢复保持唯一交易、成功后节点不可用仍从日志恢复。失败也可能包含 `PAYMENT-RESPONSE`，必须检查 `success`、错误原因及原 txid，不能以响应头存在判成功。
 
-付款人密钥仅在本次测试内随机生成；没有加载已有钱包或发起实链交易。恢复原请求不创建新授权；**防重复付款不等于防重复履约**，资源请求重放可能再次执行 handler，业务交付幂等仍由接入方负责。这不替代示例从零部署、真实 Nile 付款或进程中断恢复验收。
+该自动化测试的付款人密钥仅在测试内随机生成；不会加载已有钱包或发起实链交易，与前述人工执行的 Nile 验证分开。恢复原请求不创建新授权；**防重复付款不等于防重复履约**，资源请求重放可能再次执行 handler，业务交付幂等仍由接入方负责。这不替代示例从零部署、实链付款或进程中断恢复验收。
 
 ### 上游 TRON SDK 双向互操作
 
@@ -359,7 +369,7 @@ npm --prefix interop/bankofai test
 
 上游1.2.0的实际网络常量为 `tron:0xcd8690dc` / `tron:0x94a9059e`。互操作测试按其真实报价注册相同网络键，不将其十六进制键偷偷改成十进制，也不修改SDK常量。项目默认仍输出规范十进制；源码较新的网络别名支持不能推断为该发布包已支持。测试单独验证其拒绝十进制报价，未宣称所有上游版本/默认HTTP流程可互通。实际对接须先统一报价/能力发现/注册的网络profile并验证具体版本。
 
-测试覆盖地址、网络、TronWeb 编码/签名对照、授权/费用/时间边界、模拟节点和 PostgreSQL 并发恢复。固化核验覆盖历史过期交易、完整原始字节/块内归属、执行状态、头/块不一致、精确事件/重复和回转、嵌套重复 JSON、网络/超时/并发；恢复与持久化覆盖升级回滚、约束、冲突结果、迟到回调、SQL 失败和实际提交后响应丢失。facilitator 覆盖官方 SDK、HTTP鉴权/输入/容量/错误脱敏、动态临时签名、16并发单次签名/广播、过期及已消费 nonce 的历史恢复、pending/节点故障和未提交字节不广播。所有回执和区块均为合成夹具，没有真实链上测试。下一步核验真实部署并完成 Nile 闭环/中断恢复和从零接入验证，再整理预发布供支付网关引用。
+测试覆盖地址、网络、TronWeb 编码/签名对照、授权/费用/时间边界、模拟节点和 PostgreSQL 并发恢复。固化核验覆盖历史过期交易、完整原始字节/块内归属、执行状态、头/块不一致、精确事件/重复和回转、嵌套重复 JSON、网络/超时/并发；恢复与持久化覆盖升级回滚、约束、冲突结果、迟到回调、SQL 失败和实际提交后响应丢失。facilitator 覆盖官方 SDK、HTTP鉴权/输入/容量/错误脱敏、动态临时签名、16并发单次签名/广播、过期及已消费 nonce 的历史恢复、pending/节点故障和未提交字节不广播。自动化用例的回执和区块均为合成夹具；单笔实链接入结果单独记录在前文。下一步完成真实待确认中断恢复和干净环境接入，再整理预发布供支付网关引用。
 
 ## 参考与发布状态
 

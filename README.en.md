@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Provides official mechanisms for all three roles, a runnable facilitator HTTP example, authorization/preflight, transaction construction/broadcast, solidified exact-payment checks and durable recovery. **A real testnet round trip is not complete. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
+An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Provides official mechanisms for all three roles, a runnable facilitator HTTP example, authorization/preflight, transaction construction/broadcast, solidified exact-payment checks and durable recovery. **One real Nile HTTP payment and cross-process recovery of its succeeded record have passed; this remains an unaudited testnet development version. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
 
 ## Integration status
 
@@ -10,7 +10,7 @@ An independent TRON adapter SDK for x402: clients/agents, API resource servers a
 | --- | --- |
 | Client / agent | Implements official `SchemeNetworkClient`; configure signing/payment policy and use the official HTTP client for 402 retries |
 | API resource server | Implements official `SchemeNetworkServer`, Permit2 quotes and an `upfront` middleware example; requires a trusted facilitator, not just offline verification |
-| Self-hosted facilitator | Official mechanism and authenticated, concurrency-bounded HTTP example: preflight, controlled signing/broadcast, bounded confirmation and original-transaction recovery; real testnet acceptance pending |
+| Self-hosted facilitator | Official mechanism and authenticated, concurrency-bounded HTTP example: preflight, controlled signing/broadcast, bounded confirmation and original-transaction recovery; one Nile payment and succeeded-record restart verified, full deployment/interruption acceptance pending |
 
 Ordinary clients do not need PostgreSQL or gateway merchant/ledger modules. PostgreSQL is an optional durable storage implementation for self-hosted facilitators. Trusted contracts, asset/recipient policy, wallet signing, gas and necessary Permit2 token approval remain prerequisites; no implicit approval or on-chain action.
 
@@ -89,7 +89,17 @@ Explicit initialization and quote validation happen before listening; failures s
 
 Remote requests have a 200-second budget covering the mechanism's maximum 180 seconds. Middleware allows 410 seconds and HTTP writes 420 seconds, covering one official identical-payload pending retry. Startup discovery remains bounded to 30 seconds. Match proxy/caller budgets too; timeout does not authorize another payment.
 
-**No real testnet acceptance is claimed.** The self-hosted example below is available, but contracts/nodes must be independently provisioned and verified; no public facilitator address is assumed. Full HTTP integration tests connect the real client, resource middleware, authenticated facilitator and PostgreSQL; blockchain state and receipts remain synthetic fixtures, not live-chain acceptance.
+The self-hosted example below requires independently provisioned/verified contracts and nodes; no public facilitator address is assumed. Automated HTTP integration tests use synthetic chain state/receipts. The separate single-payment Nile exercise below **does not establish clean-room deployment of the executable examples or production acceptance**.
+
+### Single-payment Nile validation (2026-10-18)
+
+Core revision `39b83a63fab27715306cf6fb273a9dd7184195e5`, Go 1.26.5 and official Go SDK v2.28.0 used the source-reproduced Permit2/proxy below, Nile test USDT `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf`, separate payer/executor/recipient addresses and dedicated PostgreSQL. A one-off local integration program used public SDK APIs and official HTTP middleware with two loopback TLS services and real nodes/receipts; core code and admission checks were unchanged.
+
+- After a limited 0.003 test-USDT approval, a real 402 quote produced one 0.001 test-USDT authorization. Full simulation, durable unique transaction, single broadcast, solidified checks and persisted success preceded HTTP 200 resource delivery.
+- Settlement [135dfb80…23efe5](https://nile.tronscan.org/#/transaction/135dfb80322290839444d93864f8190ae16cb0aadb1b9d9621110f96b823efe5), solidified block `71933724`, with one exact Transfer and matching balance changes. Approval cost 0 and settlement cost 7.237 test TRX; these are observed fees, not future estimates.
+- After normal process exit, a new process replayed the identical authorization and returned the same txid from the existing `succeeded` record. Additional authorization signatures, transaction signatures and broadcasts were all zero; original signed bytes, balances and fees were unchanged. **This is terminal-success recovery across processes, not a forced crash while pending.**
+
+This did not validate clean-room executable-example deployment, Shasta/Mainnet, live end-to-end upstream-SDK payments, long-running stability or independent security. Private keys, original spendable authorizations and local operational materials are not published; no copy-ready production-funds configuration is supplied. Real pending-interruption recovery, clean-room integration and prerelease packaging remain pending.
 
 ## Self-hosted facilitator HTTP example
 
@@ -197,7 +207,7 @@ On 2026-10-18, local builds from the following pinned sources and compilers, lin
 
 Both use `metadata.useLiteralContent=true`, matching the [deployment plugin setting](https://github.com/sun-protocol/sunhat/blob/2efcfb61092024c69fb86f0568edc4be5c7798b7/src/index.ts#L326). Permit2 immutables use the Nile chain ID and its address to derive the domain; the proxy links the Permit2 address above. **These are reproducible standard solc builds, not the same-numbered TRON fork compiler**: that fork produced a different proxy runtime and must not be substituted.
 
-Compiler SHA-256: 0.8.17 is `617828e63be485c7cc2dbcbdd5a22b582b40fafaa41016ad595637b83c90656c`; 0.8.25 is `f8c9554471ff2db3843167dffb7a503293b5dc728c8305b044ef9fd37d626ca7`, from the [official Solidity compiler index](https://github.com/ethereum/solc-bin/blob/gh-pages/wasm/list.json). These are explicitly checked reference settings, **not automatically selected SDK/example defaults**, Mainnet configuration, a security audit, or proof of payment. Head drift can still reject a preflight round and must not be bypassed. Real testnet payment and original-transaction recovery acceptance remain incomplete.
+Compiler SHA-256: 0.8.17 is `617828e63be485c7cc2dbcbdd5a22b582b40fafaa41016ad595637b83c90656c`; 0.8.25 is `f8c9554471ff2db3843167dffb7a503293b5dc728c8305b044ef9fd37d626ca7`, from the [official Solidity compiler index](https://github.com/ethereum/solc-bin/blob/gh-pages/wasm/list.json). These are explicitly checked reference settings, **not automatically selected SDK/example defaults**; code reproduction alone is not Mainnet configuration, a security audit, or proof of payment. Head drift can still reject a preflight round and must not be bypassed. See the separate single-payment evidence and unverified scope above.
 
 ## Constrained settlement construction and external signing
 
@@ -218,7 +228,7 @@ Only a single EOA using default owner permission is supported; no multisig, cust
 - Low-level `Broadcast(ctx, prepared, transaction, now)` requires prior durable journal permission. It validates bytes/signature/network/remaining lifetime, pins block zero from **the same native node**, makes one `/wallet/broadcasthex` request, then rechecks network identity. Only explicit acceptance with a successful (or omitted) code and matching original txid acknowledges this attempt, not settlement. Network-check time counts against pre-send validity.
 - `Lookup(ctx, txid)` pins genesis before/after `/wallet/gettransactionbyid` and validates txID against `SHA-256(raw_data_hex)`. `TransactionObservation.Found` is **not execution success, finality or receipt of funds**. Only an empty object means currently not found. Timeouts, ambiguous/duplicate top-level JSON keys, bad hashes and network mismatches return errors. Neither absence nor rejection authorizes reservation release, re-signing or replacement.
 
-Only simulated-node tests have exercised these HTTP requests: no real Nile broadcast yet. Node acceptance, a FullNode body, execution and solidified payment events are distinct evidence layers. Neither method declares success; use the read-only checks below. No malicious-node state proofs are provided.
+These requests were exercised by the single real Nile settlement above; automated tests still use simulated nodes. Node acceptance, a FullNode body, execution and solidified payment events are distinct evidence layers. Neither method declares success; use the read-only checks below. No malicious-node state proofs are provided.
 
 ## Solidified original-transaction and payment-event checks
 
@@ -240,7 +250,7 @@ A successful check normally makes nine sequential read-only requests, without re
 
 After restart, `exact.RestoreSettlement(config, executorAddress, originalTransaction)` recovers a `PreparedSettlement` solely from the persisted original signed transaction. Configuration and fee-paying executor must be trusted deployment inputs. It strictly decodes this package's fixed Protobuf/ABI, checks byte-for-byte canonical re-encoding, verifies the payer's TIP-712 signature, executor's transaction signature and original txid. Authorization fields come from the original call, not an auxiliary snapshot or current quote. No `Build`, forged current time for expired authorization, validity extension, signing or broadcasting. TAPOS bytes are not a complete reference-block proof; recovery does not prove the original quote, preflight or successful payment.
 
-Compare `prepared.Authorization()` with the original trusted journal identity before calling the read-only solidified checker. Only the package's fixed single-contract, single-EOA-signature canonical encoding is accepted; other valid TRON transactions may be rejected. This is not a generic transaction importer. `ConfirmSettlement` below combines recovery, checking and durable success and is used by the facilitator and its HTTP example. Real testnet acceptance remains pending; simulated tests are not deployment acceptance.
+Compare `prepared.Authorization()` with the original trusted journal identity before calling the read-only solidified checker. Only the package's fixed single-contract, single-EOA-signature canonical encoding is accepted; other valid TRON transactions may be rejected. This is not a generic transaction importer. `ConfirmSettlement` below combines recovery, checking and durable success and is used by the facilitator and its HTTP example. One real payment does not cover every interruption window; simulated tests are not deployment acceptance.
 
 ## Durable settlement journal (optional PostgreSQL)
 
@@ -311,7 +321,7 @@ go test -race -count=1 ./exact/postgres -run '^TestHTTPAutomaticPaymentRoundTrip
 
 The official HTTP client calls `exact.NewClient` from an actual 402 challenge to generate a random nonce and real signature. Test TLS resource and authenticated facilitator services then perform preflight, full simulation, journal persistence, synthetic-node broadcast/solidified checks, and delivery only after durable success. Cases cover simulation rejection without reservation/payment/delivery, over-budget quotes rejected before signing, pending without delivery, identical-authorization recovery retaining one transaction, and cached success with the node unavailable. Failures may also include `PAYMENT-RESPONSE`: inspect `success`, the error reason and original transaction ID rather than treating header presence as success.
 
-Payer keys are generated only for the current test; no existing wallet is loaded and no live-chain transaction is sent. Recovery reuses the original authorization. **Payment deduplication is not fulfillment deduplication**: replaying a resource request may execute its handler again; business delivery idempotency remains the integrator's responsibility. This does not replace clean-room example deployment, live Nile payment or process-interruption acceptance.
+This automated test generates its own ephemeral payer key, loads no existing wallet and sends no live-chain transaction; it is separate from the manually executed Nile validation above. Recovery reuses the original authorization. **Payment deduplication is not fulfillment deduplication**: replaying a resource request may execute its handler again; business delivery idempotency remains the integrator's responsibility. This does not replace clean-room example deployment, live payment or process-interruption acceptance.
 
 ### Bidirectional upstream TRON SDK interoperability
 
@@ -329,7 +339,7 @@ Versions and complete tarball integrity are locked. During tests Node network ac
 
 Upstream 1.2.0 actually uses `tron:0xcd8690dc` / `tron:0x94a9059e`. Tests register the same keys as its real quotes, without silently rewriting them to decimal or patching SDK constants. This project's default remains canonical decimal. Newer source-level alias support does not imply support in that published package. A separate test records rejection of decimal quotes; no all-version/default-HTTP compatibility is claimed. Align quote/discovery/registration network profiles and verify the exact counterpart version before integration.
 
-Tests cover public TronWeb vectors, tampering, amount/fee/time boundaries, simulated nodes and PostgreSQL concurrency/recovery. Solidified checks cover original bytes/block membership, execution, changed heads/blocks, exact/duplicate/reversed events, malformed JSON and network/timeouts. Recovery/persistence cover upgrades/rollback, constraints, conflicting evidence, delayed callbacks, SQL failure and lost responses after actual commit. Facilitator tests cover official SDK/HTTP authentication, input/capacity/error redaction, dynamic ephemeral signatures, 16 concurrent calls with single signing/broadcast, expired/consumed-nonce recovery, pending/node failures and never broadcasting uncommitted bytes. Receipts/blocks are synthetic; no live-chain acceptance is claimed. Next: verify real deployments and complete a Nile round trip/interruption recovery and clean-room integration, then prerelease packaging before gateway integration.
+Tests cover public TronWeb vectors, tampering, amount/fee/time boundaries, simulated nodes and PostgreSQL concurrency/recovery. Solidified checks cover original bytes/block membership, execution, changed heads/blocks, exact/duplicate/reversed events, malformed JSON and network/timeouts. Recovery/persistence cover upgrades/rollback, constraints, conflicting evidence, delayed callbacks, SQL failure and lost responses after actual commit. Facilitator tests cover official SDK/HTTP authentication, input/capacity/error redaction, dynamic ephemeral signatures, 16 concurrent calls with single signing/broadcast, expired/consumed-nonce recovery, pending/node failures and never broadcasting uncommitted bytes. Automated receipts/blocks are synthetic; the single-payment live exercise is recorded separately above. Next: real pending-interruption recovery and clean-room integration, then prerelease packaging before gateway integration.
 
 ## References and status
 
