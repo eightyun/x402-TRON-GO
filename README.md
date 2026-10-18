@@ -90,7 +90,7 @@ func paymentHTTPClient(contracts exact.Config, signer *exact.EOASigner, asset, p
 
 远程调用预算200秒，覆盖 facilitator 最多180秒的机制预算；中间件410秒、HTTP写超时420秒，允许官方对携带原 txid 的 pending 原样重试一次。启动能力发现仍限30秒；反向代理和调用方也需匹配预算。不要把超时解释成付款失败或创建新授权。
 
-**尚无真实测试网验收证明**。可使用下文自建 HTTP 示例，但必须独立准备/核验合约和节点，不默认使用公共 facilitator 地址。资源服务端门槛测试使用测试专用 facilitator；HTTP 结算测试使用真实机制、真实 PostgreSQL 加模拟链节点，不能视为链上验收。
+**尚无真实测试网验收证明**。可使用下文自建 HTTP 示例，但必须独立准备/核验合约和节点，不默认使用公共 facilitator 地址。完整 HTTP 集成测试已串联真实客户端、资源中间件、鉴权 facilitator 和 PostgreSQL；区块链状态与回执仍为模拟夹具，不能视为链上验收。
 
 ## 自建 facilitator HTTP 示例
 
@@ -330,6 +330,18 @@ go build . ./exact ./exact/postgres ./examples/client ./examples/server ./exampl
 ```
 
 PostgreSQL 集成测试要求 `X402_TEST_DATABASE_URL` 指向专用测试库，并授予创建临时 schema 的权限。每个用例使用独立随机 schema，结束后仅清理自己的 schema；未设置时明确跳过数据库测试，不能当作集成验证通过。CI 配置临时 PostgreSQL 16 并实际执行这些测试。
+
+### 完整 HTTP 付款与原交易恢复
+
+设置专用测试数据库后，可单独运行[三端集成测试](exact/postgres/http_roundtrip_integration_test.go)：
+
+```bash
+go test -race -count=1 ./exact/postgres -run '^TestHTTPAutomaticPaymentRoundTripAndOriginalRecovery$'
+```
+
+官方 HTTP 客户端从实际 402 报价调用 `exact.NewClient` 生成随机 nonce/真实签名，再经测试 TLS 资源服务和鉴权 facilitator 完成预检、完整模拟、日志保存、合成节点广播/固化核验、成功落库后交付。覆盖模拟拒绝零占用/付款/交付、超额报价签名前拒绝，以及 pending 不交付、原授权恢复保持唯一交易、成功后节点不可用仍从日志恢复。失败也可能包含 `PAYMENT-RESPONSE`，必须检查 `success`、错误原因及原 txid，不能以响应头存在判成功。
+
+付款人密钥仅在本次测试内随机生成；没有加载已有钱包或发起实链交易。恢复原请求不创建新授权；**防重复付款不等于防重复履约**，资源请求重放可能再次执行 handler，业务交付幂等仍由接入方负责。这不替代示例从零部署、真实 Nile 付款或进程中断恢复验收。
 
 ### 上游 TRON SDK 双向互操作
 

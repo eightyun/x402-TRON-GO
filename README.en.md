@@ -89,7 +89,7 @@ Explicit initialization and quote validation happen before listening; failures s
 
 Remote requests have a 200-second budget covering the mechanism's maximum 180 seconds. Middleware allows 410 seconds and HTTP writes 420 seconds, covering one official identical-payload pending retry. Startup discovery remains bounded to 30 seconds. Match proxy/caller budgets too; timeout does not authorize another payment.
 
-**No real testnet acceptance is claimed.** The self-hosted example below is available, but contracts/nodes must be independently provisioned and verified; no public facilitator address is assumed. Resource-server gating tests use a test-only facilitator; HTTP settlement tests use the real mechanism and PostgreSQL with simulated chain nodes, not live-chain acceptance.
+**No real testnet acceptance is claimed.** The self-hosted example below is available, but contracts/nodes must be independently provisioned and verified; no public facilitator address is assumed. Full HTTP integration tests connect the real client, resource middleware, authenticated facilitator and PostgreSQL; blockchain state and receipts remain synthetic fixtures, not live-chain acceptance.
 
 ## Self-hosted facilitator HTTP example
 
@@ -300,6 +300,18 @@ go build . ./exact ./exact/postgres ./examples/client ./examples/server ./exampl
 Inputs are strict: no whitespace trimming, unknown networks, wildcards, or decimal leading zeros. Namespace must be `tron`; legacy hexadecimal references are case-insensitive. Addresses must be 34-character Base58Check or 42-character `41`-prefixed hex. Arbitrary `0x` addresses are not accepted as TRON input. Formatting is not authorization verification.
 
 Database tests require `X402_TEST_DATABASE_URL` pointing to a dedicated PostgreSQL database with permission to create temporary schemas. Each test creates and cleans only its own random schema. Without this variable integration tests explicitly skip; this is not a passing database acceptance run. CI provisions PostgreSQL 16 and runs them.
+
+### Full HTTP payment and original-transaction recovery
+
+After configuring a dedicated test database, run the [three-role integration test](exact/postgres/http_roundtrip_integration_test.go) independently:
+
+```bash
+go test -race -count=1 ./exact/postgres -run '^TestHTTPAutomaticPaymentRoundTripAndOriginalRecovery$'
+```
+
+The official HTTP client calls `exact.NewClient` from an actual 402 challenge to generate a random nonce and real signature. Test TLS resource and authenticated facilitator services then perform preflight, full simulation, journal persistence, synthetic-node broadcast/solidified checks, and delivery only after durable success. Cases cover simulation rejection without reservation/payment/delivery, over-budget quotes rejected before signing, pending without delivery, identical-authorization recovery retaining one transaction, and cached success with the node unavailable. Failures may also include `PAYMENT-RESPONSE`: inspect `success`, the error reason and original transaction ID rather than treating header presence as success.
+
+Payer keys are generated only for the current test; no existing wallet is loaded and no live-chain transaction is sent. Recovery reuses the original authorization. **Payment deduplication is not fulfillment deduplication**: replaying a resource request may execute its handler again; business delivery idempotency remains the integrator's responsibility. This does not replace clean-room example deployment, live Nile payment or process-interruption acceptance.
 
 ### Bidirectional upstream TRON SDK interoperability
 
