@@ -53,6 +53,16 @@ jobs:
           fi
       - name: Verify modules
         run: go mod verify
+      - name: Verify SDK consumption from an isolated application module
+        shell: bash
+        env:
+          GOWORK: off
+        run: |
+          consumer="$(mktemp -d "${RUNNER_TEMP}/x402-consumer.XXXXXX")"
+          cp integration/consumer/go.mod integration/consumer/go.sum integration/consumer/consumer_test.go "${consumer}/"
+          # PR源码尚未公开；只在临时消费者中替换当前源码，不改仓库或宣称公网安装。
+          go -C "${consumer}" mod edit -replace="github.com/eightyun/x402-tron-go=${GITHUB_WORKSPACE}"
+          go -C "${consumer}" test -mod=mod -race -count=1 -timeout=30s .
       - name: Vet implemented packages
         run: go vet . ./exact ./exact/postgres ./examples/client ./examples/payer ./internal/examplekeys ./examples/server ./examples/facilitator ./examples/deployment ./interop/bankofai/bridge ./tools/package
       - name: Run offline and PostgreSQL tests with race detection

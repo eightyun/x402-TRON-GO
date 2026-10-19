@@ -4,6 +4,31 @@
 
 An independent TRON adapter SDK for x402: clients/agents, API resource servers and facilitators should be able to integrate without implementing TRON protocol details or depending on our payment gateway. Provides official mechanisms for all three roles, a runnable facilitator HTTP example, authorization/preflight, transaction construction/broadcast, solidified exact-payment checks and durable recovery. **Real Nile HTTP payments, terminal-success recovery and cross-process recovery after a pending-process crash have passed; this remains an unaudited testnet development version. Do not use with real funds.** Not affiliated with the x402 Foundation or TRON.
 
+**This is an importable SDK, not a payment platform that users must deploy.** Import the mechanism and register it with the official x402 SDK inside your application. No `examples/*` service, Docker or payment gateway is required. Examples and executable bundles are optional demonstrations/acceptance tools, not library runtime dependencies. Explicit signing, trusted network/contracts, token/recipient and spend limits remain necessary; importing does not discover wallets or send transactions.
+
+## Install the SDK
+
+In your own Go 1.26+ project:
+
+```bash
+go get github.com/eightyun/x402-tron-go/exact@main
+
+# Optional: only for a self-managed durable facilitator, not ordinary buyers/resource servers.
+go get github.com/eightyun/x402-tron-go/exact/postgres@main
+```
+
+There is no stable tag yet. `@main` resolves to a fixed pseudo-version recorded in your application's `go.mod/go.sum`; it does not track the branch at runtime. Replace `main` with a reviewed full commit for reproducibility. Install the package actually imported: fetching only the standard-library root package need not populate dependency checksums for `exact`.
+
+| Import | Responsibility | Application requirements |
+| --- | --- | --- |
+| Root `github.com/eightyun/x402-tron-go` | Address/network utilities | Go standard library only |
+| `.../exact` | Official client/resource mechanisms, verification/settlement components | Explicit policy/signing; clients/resource servers need no database |
+| `.../exact/postgres` | Optional durable facilitator | Self-managed pgx pool, trusted nodes and transaction signer; no separate service required |
+
+The runnable [client/resource API examples](exact/example_test.go) and [in-process facilitator example](exact/postgres/example_test.go) are tested without requiring the example main programs. See the official [buyer guide](https://docs.x402.org/getting-started/quickstart-for-buyers) and [facilitator overview](https://docs.x402.org/core-concepts/facilitator). Independently check TRON support before selecting a public facilitator; EVM/Solana endpoints are not automatically TRON settlement providers.
+
+The standalone [integration/consumer](integration/consumer/go.mod) module pins a public pseudo-version without `replace`. It checks Nile/Shasta offline authorization/quotes/spend limits, official interfaces for all three roles and construction without signing/database connections. Run `GOWORK=off go test -race -count=1 .` there. CI separately copies it to a temporary directory and replaces the dependency only there with the PR checkout to test unpublished compatibility. Local replacement and actual public fixed-version installation are distinct evidence, not interchangeable claims.
+
 ## Integration status
 
 | Role | Status |
@@ -106,6 +131,14 @@ The third payment ran three independent executables extracted from actual archiv
 This completes the v0.1 testnet-candidate scope for Nile payments, interruption recovery and packaged three-process integration. It uses existing schema/independently checked contracts and local loopback services, not blank-machine installation, independent-server TLS operations or production acceptance. Public-RPC head drift can still reject new payments. Shasta/Mainnet, live end-to-end upstream-SDK payments, long-running stability and independent security remain unvalidated. Private keys, original authorizations and local operational materials are not published; no copy-ready production-funds configuration is supplied. Candidate packages can be built locally; no stable tag or GitHub release has been created.
 
 ## Self-hosted facilitator HTTP example
+
+### Embed the library in your application first
+
+`postgres.NewFacilitator(store, config)` implements the official mechanism. Pass it to `postgres.NewLocalClient(mechanism, 8)`, then supply the result to official `x402.WithFacilitatorClient(client)` inside your resource server. No facilitator URL, Bearer token, listener or separate service is required. Create the store with `postgres.New(pool, config.Preflight.Authorization)`; the application manages the pool and transaction signer, and an administrator explicitly applies the schema beforehand. The adapter reuses the official core and existing settlement/recovery rather than duplicating protocol or weakening checks.
+
+The local entry accepts v2 with a 64KiB combined-input bound, rejecting duplicate/ambiguous keys, unknown structural fields and trailing JSON. `maxConcurrent=0` defaults to eight; 1–64 is accepted. Full capacity returns `ErrLocalClientCapacity` without an unbounded queue. This limit is per client, not aggregate spending or application authentication. Cancellation/deadlines preserve context semantics. Failed/pending payments do not permit delivery; recovery uses only the original authorization and the same durable journal. Requests must not select nodes, signers or trusted contracts. For an existing separate facilitator, continue using the official `HTTPFacilitatorClient`.
+
+The HTTP executables below are optional examples, not prerequisites for importing the SDK.
 
 ### Real payment client and identical-request recovery
 

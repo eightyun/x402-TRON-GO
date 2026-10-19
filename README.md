@@ -4,6 +4,31 @@
 
 面向 x402 的独立 TRON Go 适配 SDK，目标是让客户端/Agent、API 服务端和 facilitator 直接使用 TRON 支付，不必自行实现链适配，也不依赖我们的支付网关。当前已有官方三端机制、facilitator HTTP 启动示例，以及授权预检、交易构建/广播、固化精确到账核验和持久化恢复。**已完成真实 Nile HTTP 付款、成功终态及待确认进程中断后的跨进程恢复；仍是未审计的测试网开发版本，不可用于承载真实资金**。本项目不隶属于 x402 Foundation 或 TRON。
 
+**这是可直接导包的 SDK，不是需要部署的支付平台。** 普通应用导入机制并注册到官方 x402 SDK 即可接入；不要求运行本仓库的 `examples/*` 服务、Docker 或支付网关。`examples/` 和二进制打包只作可选演示/验收，不是库的运行依赖。签名器、可信网络/合约、资产/收款人/限额仍须显式配置，导包不会自动寻找钱包或发起交易。
+
+## 安装 SDK
+
+在自己的 Go 1.26+ 项目中执行：
+
+```bash
+go get github.com/eightyun/x402-tron-go/exact@main
+
+# 仅自建持久化 facilitator 才需要；普通付款端/资源端不需要它。
+go get github.com/eightyun/x402-tron-go/exact/postgres@main
+```
+
+当前尚无稳定版本tag；`@main` 会解析成写入应用`go.mod/go.sum`的固定伪版本，不是在运行时追踪分支。需要复现时将`main`换成审核过的完整commit。应安装实际导入的子包：只`go get`标准库根工具包，不一定补齐`exact`所需的依赖校验。
+
+| 导入路径 | 职责 | 接入方需要什么 |
+| --- | --- | --- |
+| 根包 `github.com/eightyun/x402-tron-go` | 地址、网络工具 | 仅Go标准库 |
+| `.../exact` | 官方客户端/资源端机制、验签与链结算组件 | 显式策略/签名器；客户端和资源端不需要数据库 |
+| `.../exact/postgres` | 可选的持久化facilitator | 自管pgx连接池、可信节点、交易签名器；不强制独立服务 |
+
+[客户端/资源端可运行API示例](exact/example_test.go)和[进程内facilitator示例](exact/postgres/example_test.go)会随测试执行，不要求使用`examples`里的main程序。官方职责划分见[x402客户端指南](https://docs.x402.org/getting-started/quickstart-for-buyers)与[facilitator说明](https://docs.x402.org/core-concepts/facilitator)；公共facilitator是否支持TRON必须另行核对，不能把EVM/Solana端点直接当作TRON结算端。
+
+仓库外消费回归在独立模块[integration/consumer](integration/consumer/go.mod)：固定公开伪版本、没有`replace`，覆盖Nile/Shasta离线签名/报价/限额、三端官方接口及构造不签名/不连接数据库。可在该目录执行`GOWORK=off go test -race -count=1 .`。CI另复制到临时目录并仅在那里将依赖替换为当前PR源码，验证未发布改动的兼容性；这与实际从公网安装固定版本是不同的证据，不把本地替换当作公网安装通过。
+
 ## 开箱即用进度
 
 | 角色 | 当前状态 |
@@ -107,6 +132,14 @@ func paymentHTTPClient(contracts exact.Config, signer *exact.EOASigner, asset, p
 这完成了v0.1测试网候选范围的Nile实付、中断恢复和实际打包三端接入。它使用已有数据库/已核验合约和本机loopback服务，不是空白机器安装、独立服务器TLS运维或生产验收；公共RPC仍可能因链头变化拒绝新付款。Shasta/主网、上游SDK端到端实付、长时稳定性及独立安全审计仍未验证。私钥、原始授权和本机运维材料不公开，不提供可照搬的生产资金配置。候选包可自行构建；尚未创建稳定版本tag或GitHub release。
 
 ## 自建 facilitator HTTP 示例
+
+### 优先按库嵌入自己的应用
+
+`postgres.NewFacilitator(store, config)`实现官方机制；再调用`postgres.NewLocalClient(mechanism, 8)`，即可直接作为官方`x402.WithFacilitatorClient(client)`传给自己的资源服务端，无需facilitator URL、Bearer令牌、监听端口或独立服务。`store`由`postgres.New(pool, config.Preflight.Authorization)`构造，`pool`和费用签名器仍由应用管理，管理员事先显式应用schema。此适配器复用官方core及原结算/恢复逻辑，不复制协议或降低验证。
+
+进程内入口只接受v2、有界64KiB总载荷，拒绝重复/歧义键、未知结构字段及尾随JSON；`maxConcurrent=0`默认8，允许1~64，满载返回`ErrLocalClientCapacity`，不排无界队列。该上限只覆盖这个client，不是累计费用预算或应用鉴权。取消/超时保留context语义，失败/待确认不交付，恢复只认原授权与同一持久化日志；不允许由请求选择节点、签名器或可信合约。已有独立facilitator时，仍使用官方`HTTPFacilitatorClient`对接即可。
+
+下方HTTP程序是可选示例，不是普通导包接入的前置条件。
 
 ### 真实付款客户端与原请求恢复
 
