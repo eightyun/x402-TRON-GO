@@ -113,4 +113,18 @@ func TestImportedFacilitatorConstructionIsLazy(t *testing.T) {
 	if len(core.GetSupported().Kinds) != 1 || calls.Load() != 0 {
 		t.Fatal("导包/构造/注册触发网络或签名")
 	}
+	local, err := postgres.NewLocalClient(mechanism, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource, err := exact.NewServer(exact.ServerConfig{Network: tron.NetworkNile, Asset: "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf", PayTo: "TNPeeaaFB7K9cmo4uQpcU32zGK8G1NYqeL"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 直接作为官方资源服务端依赖，不启动facilitator HTTP服务或连接数据库。
+	_ = x402.Newx402ResourceServer(x402.WithFacilitatorClient(local)).Register(x402.Network(tron.NetworkNile), resource)
+	supported, err := local.GetSupported(ctx)
+	if err != nil || len(supported.Kinds) != 1 || supported.Kinds[0].Network != tron.NetworkNile || calls.Load() != 0 {
+		t.Fatal("进程内导包/能力发现触发网络或签名，或能力不匹配")
+	}
 }

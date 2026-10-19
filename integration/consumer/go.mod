@@ -3,7 +3,7 @@ module example.invalid/x402-consumer
 go 1.26.0
 
 require (
-	github.com/eightyun/x402-tron-go v0.0.0-20261018160545-c21962a5e995
+	github.com/eightyun/x402-tron-go v0.0.0-20261019150616-06af9f388d6e
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/x402-foundation/x402/go/v2 v2.28.0
 )

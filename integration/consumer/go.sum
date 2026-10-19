@@ -5,8 +5,8 @@ github.com/decred/dcrd/crypto/blake256 v1.1.0 h1:zPMNGQCm0g4QTY27fOCorQW7EryeQ/U
 github.com/decred/dcrd/crypto/blake256 v1.1.0/go.mod h1:2OfgNZ5wDpcsFmHmCK5gZTPcCXqlm2ArzUIkw9czNJo=
 github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 h1:5RVFMOWjMyRy8cARdy79nAmgYw3hK/4HUq48LQ6Wwqo=
 github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1/go.mod h1:ZXNYxsqcloTdSy/rNShjYzMhyjf0LaoftYK0p+A3h40=
-github.com/eightyun/x402-tron-go v0.0.0-20261018160545-c21962a5e995 h1:o3+7w9gD4WmjSWr6j8r0GUZdT/YaBxkt9ElHepfrCl8=
-github.com/eightyun/x402-tron-go v0.0.0-20261018160545-c21962a5e995/go.mod h1:MUR4gaF1RM39x5hpk3d6jw9OSvMhAhEqqPAeEGOpSSs=
+github.com/eightyun/x402-tron-go v0.0.0-20261019150616-06af9f388d6e h1:tuxkRF0VsNrvtYo/tnK661KOEEj8qxeaaladImzUAMY=
+github.com/eightyun/x402-tron-go v0.0.0-20261019150616-06af9f388d6e/go.mod h1:MUR4gaF1RM39x5hpk3d6jw9OSvMhAhEqqPAeEGOpSSs=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=
