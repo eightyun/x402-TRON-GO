@@ -57,7 +57,7 @@
 | T1 | 恶意 402 报价诱导客户端签署超额、错误资产/收款人或长效授权 | 客户端固定网络/资产/收款人/单次 `MaxAmount`，叠加官方 SDK 金额上限；有效期 6 秒~10 分钟取较小值；签名后复验（`exact/client.go`） | 单次上限不是累计预算；授权不绑定 URL/请求内容 |
 | T2 | 伪造或篡改授权（金额、收款人、spender、nonce、期限、网络） | TIP-712/Permit2 见证完整重算并验签，可信签名域不接受请求覆盖（`exact/authorization.go`）；双向互操作篡改测试 | 依赖链上合约与代码哈希的独立核验 |
 | T3 | 同一授权重复结算 / 并发双花 | 单行事务锁内占用与 CAS 状态转换，只有 `BeginBroadcast` 成功才可广播，已 unknown/pending/succeeded 不再发送（`exact/postgres/store.go`、`facilitator.go`） | 签名后、提交前崩溃可能重复调用签名器，不保证 HSM 恰好一次 |
-| T4 | 超时/断线后重新生成授权或重签，导致重复扣款 | 恢复只认原授权与原签名交易；pending/unknown 携原 txid 返回，禁止释放占用或新建付款（`recovery.go`、`facilitator.go`） | 集成方若清空日志或换新目录重试会破坏该保证 |
+| T4 | 超时/断线后重新生成授权或重签，导致重复扣款 | 恢复只认原授权与原签名交易；pending/unknown 携原 txid 返回，禁止释放占用或新建付款（`recovery.go`、`facilitator.go`） | 集成方若清空日志或换新目录重试会破坏该保证；对接无持久化日志的上游 facilitator 时，重放已成功的授权会再次广播并耗费手续费（链上回滚，不重复扣款） |
 | T5 | 节点受理或回执被误判为到账，提前交付资源 | 只有 Solidity 固化区块内、执行成功且精确匹配 Transfer 事件的原交易才确认成功，随后才返回 `success=true`（`exact/receipt.go`、`ConfirmSettlement`） | 不验证 Merkle 证明，不防御恶意节点伪造固化状态 |
 | T6 | 畸形/超大/歧义的节点响应导致 panic、误判或资源耗尽 | 响应上限 1 MiB、禁止重定向、拒绝重复键与尾随内容、原生整数严格解析、创世块前后核对、错误脱敏（`exact/rpc.go`、`execution.go`）；`FuzzExecutionLookupBody` | 慢节点或链头漂移可能导致保守拒绝 |
 | T7 | 恶意 HTTP 请求绕过输入校验或耗尽资源 | Bearer 令牌（常量时间比较），64 KiB 上限，拒绝重复/大小写歧义键、未知字段（逐层，含 `accepted`）、尾随内容和非 v2；并发上限 1~64，满载 503 且不签名/广播（`exact/postgres/http.go`）；`FuzzStrictPaymentDecoding` | 并发上限不是限流或费用预算；TLS、入口鉴权与限流由部署方负责 |
@@ -81,7 +81,7 @@
 - 单元/集成测试：race 模式，PostgreSQL 真实并发恢复、合成链与模拟节点。
 - Fuzz：地址、网络、授权验证、交易校验、恢复、节点 Lookup 响应、facilitator 请求解码共 8 个目标，种子随常规测试执行；2026-11-11 每个目标各模糊测试 3 分钟（合计约 1.8 亿次执行），未发现失败。
 - 互操作：与已发布上游 TRON JS SDK 离线双向授权验证及篡改拒绝。
-- Nile 测试网：真实付款、成功终态恢复、待确认期间进程强制中断后的原交易恢复，以及上游 JS 付款端 → Go 资源端/facilitator 的跨 SDK 实付。
+- Nile 测试网：真实付款、成功终态恢复、待确认期间进程强制中断后的原交易恢复，以及双向跨 SDK 实付（上游 JS 付款端 → Go facilitator；Go 付款端 → 上游 facilitator）。
 - 依赖扫描：govulncheck（CI 门禁）与 Dependabot 安全更新。
 
 ## 8. 建议审计重点
