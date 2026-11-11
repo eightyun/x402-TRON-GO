@@ -4,8 +4,8 @@
 
 - x402 Foundation Go SDK v2.28.0：复用公开协议类型、机制接口、客户端与 HTTP 中间件，不复制协议核心。Apache-2.0，来源 https://github.com/x402-foundation/x402/tree/go/v2.28.0/go 。
 - secp256k1/v4 v4.4.1：ISC，来源 https://github.com/decred/dcrd/tree/master/dcrec/secp256k1 。
-- pgx/v5 v5.9.2 及 pgpassfile、pgservicefile、puddle/v2：可选 PostgreSQL 适配器使用，MIT，来源 https://github.com/jackc/pgx 、https://github.com/jackc/pgpassfile 、https://github.com/jackc/pgservicefile 和 https://github.com/jackc/puddle 。
-- golang.org/x/crypto v0.51.0、x/sys v0.45.0、x/sync v0.22.0、x/text v0.41.0 及 x/net v0.55.0：BSD-3-Clause，来源 https://go.googlesource.com/crypto/ 、https://go.googlesource.com/sys/ 、https://go.googlesource.com/sync/ 、https://go.googlesource.com/text/ 和 https://go.googlesource.com/net/ 。
+- pgx/v5 v5.12.0 及 pgpassfile、pgservicefile、puddle/v2：可选 PostgreSQL 适配器使用，MIT，来源 https://github.com/jackc/pgx 、https://github.com/jackc/pgpassfile 、https://github.com/jackc/pgservicefile 和 https://github.com/jackc/puddle 。
+- golang.org/x/crypto v0.58.0、x/sys v0.49.0、x/sync v0.24.0、x/text v0.43.0 及 x/net v0.60.0：BSD-3-Clause，来源 https://go.googlesource.com/crypto/ 、https://go.googlesource.com/sys/ 、https://go.googlesource.com/sync/ 、https://go.googlesource.com/text/ 和 https://go.googlesource.com/net/ 。
 - gojsonschema v1.2.0、gojsonreference 与 gojsonpointer：官方 HTTP 中间件的间接依赖，Apache-2.0，来源 https://github.com/xeipuuv/gojsonschema 、https://github.com/xeipuuv/gojsonreference 和 https://github.com/xeipuuv/gojsonpointer 。
 - TronWeb 6.3.0（公开向量生成）与 6.5.1（`interop/bankofai` 互操作测试）：仅作为离线授权/结算交易向量生成、ABI/Protobuf 编码和验签工具，不是 Go 运行依赖；MIT，来源 https://github.com/tronprotocol/tronweb 。公开向量使用合成区块，不包含私钥。
 - `@bankofai/x402-tron` 2.1.2 和 `@x402/core` 2.29.0：仅在 `interop/bankofai` 离线测试中调用实际发布包的公开接口，不是 Go 运行依赖。发布包声明 Apache-2.0，来源 https://www.npmjs.com/package/@bankofai/x402-tron/v/2.1.2 、https://www.npmjs.com/package/@x402/core/v/2.29.0 、https://github.com/BofAI/x402 及 https://github.com/x402-foundation/x402 。包版本及完整依赖 integrity 固定在测试锁文件；发布包不等同于下述源码快照，也不表示本项目获得官方背书。
