@@ -1,23 +1,20 @@
 version: 2
+# 只接收安全更新：版本升级 PR 上限为 0，安全更新 PR 不受该上限约束。
+# 例行依赖升级由维护者直接在 main 完成；CI 另有每周 govulncheck 兜底。
 updates:
   # SDK 主模块依赖；integration/consumer 刻意固定已发布版本，不纳入自动更新。
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
-    groups:
-      golang-x:
-        patterns:
-          - "golang.org/x/*"
-  # 互操作测试固定精确版本；更新 PR 会因版本基线断言失败，需人工复核后同步测试。
+    open-pull-requests-limit: 0
   - package-ecosystem: npm
     directory: /interop/bankofai
     schedule:
       interval: weekly
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0

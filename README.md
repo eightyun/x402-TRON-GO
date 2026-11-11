@@ -8,7 +8,7 @@
 
 ## 安装 SDK
 
-在自己的 Go 1.26+ 项目中执行：
+在自己的 Go 1.26.10+ 项目中执行（上游官方 x402 Go SDK 要求）：
 
 ```bash
 go get github.com/eightyun/x402-tron-go/exact@v0.1.0-rc.2
@@ -43,7 +43,7 @@ go get github.com/eightyun/x402-tron-go/exact/postgres@v0.1.0-rc.2
 
 ## 客户端快速体验
 
-要求 Go 1.26 或更高；尚未发布稳定版本。克隆仓库后运行：
+要求 Go 1.26.10 或更高；尚未发布稳定版本。克隆仓库后运行：
 
 ```bash
 go run ./examples/client
@@ -193,14 +193,14 @@ go run ./examples/payer recover
 - 识别 Mainnet、Nile、Shasta 网络，兼容已知历史十六进制别名，统一输出十进制 CAIP-2 标识。
 - 校验 Base58Check 或 `41` 前缀十六进制地址，支持两者转换。
 - 将有效 TRON 地址显式转换成 TIP-712 所需的 `0x` + 20 字节地址。
-- 根包仅使用 Go 标准库；`exact` 包复用官方 SDK v2.28.0 的协议类型，使用成熟的 secp256k1/Keccak 库校验授权。
+- 根包仅使用 Go 标准库；`exact` 包复用官方 SDK v2.30.0 的协议类型，使用成熟的 secp256k1/Keccak 库校验授权。
 - 离线校验不访问 RPC；可选的 `PreflightVerifier` 仅执行只读 JSON-RPC。两者均不持有密钥、不批准代币授权、不消费 nonce 或广播交易。
 
 网络标识支持不等于该网络的支付机制已实现。TRON 主网和测试网使用相同地址格式，**不能根据地址判断网络**。地址格式有效不代表已激活、筛查通过或拥有资金。
 
 ## 使用
 
-要求 Go 1.26 或更高版本；CI 使用 1.26.x。当前仅有测试网候选版本，公共 API 仍可能调整。
+要求 Go 1.26.10 或更高版本；CI 使用最新 1.26.x 补丁版。当前仅有测试网候选版本，公共 API 仍可能调整。
 
 ```go
 import tron "github.com/eightyun/x402-tron-go"

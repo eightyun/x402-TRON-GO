@@ -1,9 +1,7 @@
 package postgres
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 
 	x402 "github.com/x402-foundation/x402/go/v2"
@@ -87,10 +85,5 @@ func validLocalRequest(payload, requirements []byte) bool {
 	}
 	var payment *types.PaymentPayload
 	var quote *types.PaymentRequirements
-	decode := func(data []byte, output interface{}) bool {
-		decoder := json.NewDecoder(bytes.NewReader(data))
-		decoder.DisallowUnknownFields()
-		return decoder.Decode(output) == nil
-	}
-	return decode(payload, &payment) && decode(requirements, &quote) && payment != nil && quote != nil && payment.X402Version == 2
+	return strictPaymentPayload(payload, &payment) && strictPaymentRequirements(requirements, &quote) && payment != nil && quote != nil && payment.X402Version == 2
 }

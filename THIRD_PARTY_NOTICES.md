@@ -2,7 +2,7 @@
 
 本项目独立实现 TRON 支付机制，不隶属于下述组织。依赖的许可证和版权仍由其原作者保留。
 
-- x402 Foundation Go SDK v2.28.0：复用公开协议类型、机制接口、客户端与 HTTP 中间件，不复制协议核心。Apache-2.0，来源 https://github.com/x402-foundation/x402/tree/go/v2.28.0/go 。
+- x402 Foundation Go SDK v2.30.0：复用公开协议类型、机制接口、客户端与 HTTP 中间件，不复制协议核心。Apache-2.0，来源 https://github.com/x402-foundation/x402/tree/go/v2.30.0/go 。
 - secp256k1/v4 v4.4.1：ISC，来源 https://github.com/decred/dcrd/tree/master/dcrec/secp256k1 。
 - pgx/v5 v5.12.0 及 pgpassfile、pgservicefile、puddle/v2：可选 PostgreSQL 适配器使用，MIT，来源 https://github.com/jackc/pgx 、https://github.com/jackc/pgpassfile 、https://github.com/jackc/pgservicefile 和 https://github.com/jackc/puddle 。
 - golang.org/x/crypto v0.58.0、x/sys v0.49.0、x/sync v0.24.0、x/text v0.43.0 及 x/net v0.60.0：BSD-3-Clause，来源 https://go.googlesource.com/crypto/ 、https://go.googlesource.com/sys/ 、https://go.googlesource.com/sync/ 、https://go.googlesource.com/text/ 和 https://go.googlesource.com/net/ 。

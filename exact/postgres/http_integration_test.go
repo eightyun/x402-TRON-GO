@@ -177,6 +177,7 @@ func TestHTTPRejectsRequestsBeforeSideEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	valid, _ := json.Marshal(map[string]interface{}{"x402Version": 2, "paymentPayload": envelope(t, fixture.input), "paymentRequirements": fixture.input.Requirements})
+	missingPayload, _ := json.Marshal(map[string]interface{}{"x402Version": 2, "paymentRequirements": fixture.input.Requirements})
 	for _, test := range []struct {
 		name, method, path, body, auth, media string
 		status                                int
@@ -194,6 +195,10 @@ func TestHTTPRejectsRequestsBeforeSideEffects(t *testing.T) {
 		{"case_duplicate", "POST", "/settle", strings.Replace(string(valid), `"amount":"1000"`, `"amount":"1","Amount":"1000"`, 1), "Bearer " + httpTestToken, "application/json", 400},
 		{"nested_duplicate", "POST", "/settle", strings.Replace(string(valid), `"signature":`, `"signature":"bad","signature":`, 1), "Bearer " + httpTestToken, "application/json", 400},
 		{"unknown", "POST", "/settle", `{"other":1,` + string(valid)[1:], "Bearer " + httpTestToken, "application/json", 400},
+		{"payload_unknown", "POST", "/settle", strings.Replace(string(valid), `"paymentPayload":{`, `"paymentPayload":{"other":1,`, 1), "Bearer " + httpTestToken, "application/json", 400},
+		{"accepted_unknown", "POST", "/settle", strings.Replace(string(valid), `"accepted":{`, `"accepted":{"other":1,`, 1), "Bearer " + httpTestToken, "application/json", 400},
+		{"requirements_unknown", "POST", "/settle", strings.Replace(string(valid), `"paymentRequirements":{`, `"paymentRequirements":{"other":1,`, 1), "Bearer " + httpTestToken, "application/json", 400},
+		{"payload_missing", "POST", "/settle", string(missingPayload), "Bearer " + httpTestToken, "application/json", 400},
 		{"version", "POST", "/settle", strings.ReplaceAll(string(valid), `"x402Version":2`, `"x402Version":1`), "Bearer " + httpTestToken, "application/json", 400},
 		{"depth", "POST", "/settle", strings.Repeat("[", 34) + "0" + strings.Repeat("]", 34), "Bearer " + httpTestToken, "application/json", 400},
 		{"syntax", "POST", "/settle", `{"x402Version":`, "Bearer " + httpTestToken, "application/json", 400},

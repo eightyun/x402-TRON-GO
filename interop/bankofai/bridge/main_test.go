@@ -31,9 +31,31 @@ func testRequest(t *testing.T) request {
 	return request{Operation: "create", Config: fixture.Config, Requirements: fixture.Requirements, MaxAmount: fixture.Requirements.Amount}
 }
 
+// encodeRequest 与 JS 调用方一致：尚无授权时不发送 payload 字段，避免零值 accepted 被上游网络校验提前拒绝。
+func encodeRequest(t *testing.T, input request) []byte {
+	t.Helper()
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Payload.X402Version != 0 {
+		return data
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	delete(fields, "payload")
+	data, err = json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func TestBridgeCreatesAndVerifiesPublicSDKPayload(t *testing.T) {
 	input := testRequest(t)
-	data, _ := json.Marshal(input)
+	data := encodeRequest(t, input)
 	var output bytes.Buffer
 	if err := run(context.Background(), bytes.NewReader(data), &output); err != nil {
 		t.Fatal(err)
@@ -77,7 +99,7 @@ func TestBridgeRejectsInvalidInputAndPolicy(t *testing.T) {
 	} {
 		input := testRequest(t)
 		mutation(&input)
-		data, _ := json.Marshal(input)
+		data := encodeRequest(t, input)
 		if err := run(context.Background(), bytes.NewReader(data), io.Discard); !errors.Is(err, errBridge) {
 			t.Fatal("越权/不支持请求未拒绝")
 		}

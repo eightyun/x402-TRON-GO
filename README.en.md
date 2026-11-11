@@ -8,7 +8,7 @@ An independent TRON adapter SDK for x402: clients/agents, API resource servers a
 
 ## Install the SDK
 
-In your own Go 1.26+ project:
+In your own Go 1.26.10+ project (required by the official x402 Go SDK):
 
 ```bash
 go get github.com/eightyun/x402-tron-go/exact@v0.1.0-rc.2
@@ -43,7 +43,7 @@ Ordinary clients do not need PostgreSQL or gateway merchant/ledger modules. Post
 
 ## Client quick start
 
-Requires Go 1.26+. No stable release yet. From a clone:
+Requires Go 1.26.10+. No stable release yet. From a clone:
 
 ```bash
 go run ./examples/client
@@ -193,7 +193,7 @@ Upfront payment is not automatically refunded if the handler later fails; do not
 - `NormalizeAddressHex` and `NormalizeAddressBase58`: validate and convert TRON addresses.
 - `AddressForSigning`: explicitly convert a valid TRON address to a 20-byte `0x` address for TIP-712.
 
-The root package uses only the standard library. The `exact` package uses official x402 Go SDK v2.28.0 types and established secp256k1/Keccak libraries. Offline verification makes no RPC calls; optional preflight performs read-only JSON-RPC. Neither stores keys, approves tokens, consumes nonces or broadcasts transactions. Recognizing a network does not mean settlement is supported. Address format cannot distinguish TRON networks or establish account activation, safety, or balance.
+The root package uses only the standard library. The `exact` package uses official x402 Go SDK v2.30.0 types and established secp256k1/Keccak libraries. Offline verification makes no RPC calls; optional preflight performs read-only JSON-RPC. Neither stores keys, approves tokens, consumes nonces or broadcasts transactions. Recognizing a network does not mean settlement is supported. Address format cannot distinguish TRON networks or establish account activation, safety, or balance.
 
 ## Offline exact Permit2 verification
 
@@ -358,7 +358,7 @@ External signing holds one database connection and a row lock: use short signing
 
 ## Development
 
-Requires Go 1.26+. CI uses 1.26.x. Only a testnet release candidate exists; public APIs may change.
+Requires Go 1.26.10+. CI uses the latest 1.26.x patch. Only a testnet release candidate exists; public APIs may change.
 
 ```bash
 go mod verify

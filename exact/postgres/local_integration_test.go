@@ -66,6 +66,7 @@ func TestLocalClientRejectsMalformedInputBeforeMechanism(t *testing.T) {
 		{"duplicate", []byte(strings.Replace(string(payload), `"x402Version":2`, `"x402Version":1,"x402Version":2`, 1)), requirements},
 		{"case_duplicate", []byte(strings.Replace(string(payload), `"x402Version":2`, `"X402Version":1,"x402Version":2`, 1)), requirements},
 		{"unknown_field", append([]byte(`{"private-marker":true,`), payload[1:]...), requirements},
+		{"accepted_unknown", []byte(strings.Replace(string(payload), `"accepted":{`, `"accepted":{"private-marker":true,`, 1)), requirements},
 		{"nested_duplicate", []byte(strings.Replace(string(payload), `"amount":"1000"`, `"amount":"999","amount":"1000"`, 1)), requirements},
 		{"trailing", append(append([]byte{}, payload...), []byte(` {}`)...), requirements},
 		{"oversize", []byte(strings.Repeat(" ", 64<<10)), requirements},

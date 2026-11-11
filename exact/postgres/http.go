@@ -99,18 +99,18 @@ func NewHTTPHandler(mechanism *Facilitator, config HTTPConfig) (http.Handler, er
 			return
 		}
 		var request struct {
-			X402Version         int                       `json:"x402Version"`
-			PaymentPayload      types.PaymentPayload      `json:"paymentPayload"`
-			PaymentRequirements types.PaymentRequirements `json:"paymentRequirements"`
+			X402Version         int             `json:"x402Version"`
+			PaymentPayload      json.RawMessage `json:"paymentPayload"`
+			PaymentRequirements json.RawMessage `json:"paymentRequirements"`
 		}
-		decoder := json.NewDecoder(bytes.NewReader(body))
-		decoder.DisallowUnknownFields()
-		if !uniqueHTTPJSON(body) || decoder.Decode(&request) != nil || request.X402Version != 2 || request.PaymentPayload.X402Version != 2 {
+		var payment *types.PaymentPayload
+		var quote *types.PaymentRequirements
+		if !uniqueHTTPJSON(body) || !strictJSON(body, &request) || request.X402Version != 2 || !strictPaymentPayload(request.PaymentPayload, &payment) || !strictPaymentRequirements(request.PaymentRequirements, &quote) || payment == nil || quote == nil || payment.X402Version != 2 {
 			writeHTTPJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
 			return
 		}
-		payload, _ := json.Marshal(request.PaymentPayload)
-		requirements, _ := json.Marshal(request.PaymentRequirements)
+		payload, _ := json.Marshal(payment)
+		requirements, _ := json.Marshal(quote)
 		ctx, cancel := context.WithTimeout(r.Context(), mechanism.timeout+5*time.Second)
 		defer cancel()
 		if r.URL.Path == "/verify" {
@@ -149,6 +149,42 @@ func writeHTTPJSON(w http.ResponseWriter, status int, value interface{}) {
 }
 
 // uniqueHTTPJSON 拒绝任何层级的歧义键及尾随值；深度限制防止恶意嵌套消耗栈。
+// 上游 x402 v2.29 起 PaymentPayload/PaymentRequirements 自带 UnmarshalJSON，外层 DisallowUnknownFields
+// 不再作用于其内部字段。以下去掉方法的同构类型用于逐层拒绝未知字段，最后仍以上游类型解码，保留其 CAIP-2 等校验。
+type (
+	methodlessPaymentPayload      types.PaymentPayload
+	methodlessPaymentRequirements types.PaymentRequirements
+)
+
+func strictJSON(data []byte, output interface{}) bool {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(output) == nil
+}
+
+func strictPaymentRequirements(data []byte, output **types.PaymentRequirements) bool {
+	var shadow *methodlessPaymentRequirements
+	return strictJSON(data, &shadow) && strictJSON(data, output)
+}
+
+func strictPaymentPayload(data []byte, output **types.PaymentPayload) bool {
+	// 顶层字段由去方法类型严格检查；其 Accepted 仍是上游类型，需单独严格检查。
+	var shadow *methodlessPaymentPayload
+	var nested *struct {
+		Accepted json.RawMessage `json:"accepted"`
+	}
+	if !strictJSON(data, &shadow) || json.Unmarshal(data, &nested) != nil {
+		return false
+	}
+	if nested != nil && len(nested.Accepted) != 0 {
+		var accepted *methodlessPaymentRequirements
+		if !strictJSON(nested.Accepted, &accepted) {
+			return false
+		}
+	}
+	return strictJSON(data, output)
+}
+
 func uniqueHTTPJSON(body []byte) bool {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
