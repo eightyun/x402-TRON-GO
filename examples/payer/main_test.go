@@ -54,7 +54,7 @@ func fixtureConfig(t *testing.T) (configuration, *exact.EOASigner) {
 }
 
 func TestPayAndRecoverPreserveOriginalAuthorization(t *testing.T) {
-	for _, mode := range []string{"success", "pending", "unknown", "overprice", "wrong_receipt", "oversized_body"} {
+	for _, mode := range []string{"success", "upstream_receipt", "pending", "unknown", "overprice", "wrong_receipt", "wrong_payer", "oversized_body"} {
 		t.Run(mode, func(t *testing.T) {
 			c, _ := fixtureConfig(t)
 			var recovered atomic.Bool
@@ -118,6 +118,14 @@ func TestPayAndRecoverPreserveOriginalAuthorization(t *testing.T) {
 				if mode == "wrong_receipt" && !recovered.Load() {
 					receipt.Amount = "2000"
 				}
+				if mode == "upstream_receipt" {
+					// 上游 TRON SDK：付款人为同一地址的 0x 格式，省略可选 amount。
+					signing, _ := tron.AddressForSigning(c.Payer)
+					receipt.Payer, receipt.Amount = "0x"+strings.ToUpper(signing[2:]), ""
+				}
+				if mode == "wrong_payer" && !recovered.Load() {
+					receipt.Payer = "0x" + strings.Repeat("1", 40)
+				}
 				b, _ = json.Marshal(receipt)
 				w.Header().Set("PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(b))
 				w.WriteHeader(status)
@@ -133,7 +141,7 @@ func TestPayAndRecoverPreserveOriginalAuthorization(t *testing.T) {
 			defer cancel()
 			var output bytes.Buffer
 			err := run(ctx, c, "pay", server.Client(), &output)
-			if mode == "success" {
+			if mode == "success" || mode == "upstream_receipt" {
 				if err != nil {
 					t.Fatal("实客户端握手失败", err)
 				}

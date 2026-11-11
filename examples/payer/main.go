@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -209,7 +210,7 @@ func run(ctx context.Context, c configuration, mode string, base *http.Client, o
 				}
 			}
 		}
-		result.Success = requestErr == nil && readErr == nil && len(body) <= 1<<20 && stateErr == nil && paymentErr == nil && validReceipt && response.StatusCode == 200 && receipt.Success && receipt.ErrorReason == "" && result.TransactionID != "" && string(receipt.Network) == c.Network && receipt.Payer == c.Payer && receipt.Amount == p.Accepted.Amount
+		result.Success = requestErr == nil && readErr == nil && len(body) <= 1<<20 && stateErr == nil && paymentErr == nil && validReceipt && response.StatusCode == 200 && receipt.Success && receipt.ErrorReason == "" && result.TransactionID != "" && string(receipt.Network) == c.Network && receiptMatches(receipt.Payer, receipt.Amount, c.Payer, p.Accepted.Amount)
 		if result.Success {
 			result.ResponseFile = prefix + ".response.body"
 			if writeState(c.stateDirectory, result.ResponseFile, body) != nil {
@@ -229,6 +230,20 @@ func run(ctx context.Context, c configuration, mode string, base *http.Client, o
 		return errPayment
 	}
 	return nil
+}
+
+// receiptMatches 核对回执付款人与金额。x402 协议中 amount 可省略，出现时必须一致；
+// 付款人可为 Base58，或同一已配置付款人的 0x 签名格式（上游 TRON SDK 即如此返回）。
+// 只与已知付款人比较，不把任意 EVM 地址解析为 TRON 地址。
+func receiptMatches(payer, amount, expectedPayer, expectedAmount string) bool {
+	if amount != "" && amount != expectedAmount {
+		return false
+	}
+	if payer == expectedPayer {
+		return true
+	}
+	signing, err := tron.AddressForSigning(expectedPayer)
+	return err == nil && strings.EqualFold(payer, signing)
 }
 
 func safeReason(reason string) string {
