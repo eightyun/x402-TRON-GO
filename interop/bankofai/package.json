@@ -11,6 +11,6 @@
   "devDependencies": {
     "@bankofai/x402-tron": "2.1.2",
     "@x402/core": "2.29.0",
-    "tronweb": "6.5.1"
+    "tronweb": "6.5.2"
   }
 }
