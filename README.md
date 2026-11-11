@@ -39,7 +39,7 @@ go get github.com/eightyun/x402-tron-go/exact/postgres@v0.1.0-rc.3
 
 普通客户端不需要 PostgreSQL，不加载支付网关的商户/账本模块。数据库只是自建 facilitator 可选的持久化实现。网络、资产与收款策略、钱包签名、Gas 和必要的 Permit2 代币授权仍是接入前置条件；不自动授权或隐式上链。
 
-**互操作边界：** 已用实际发布的 `@bankofai/x402-tron@2.1.2` 与官方 `@x402/core@2.29.0` 完成离线双向授权测试。该版本与本项目同样以十进制 CAIP-2（例如 Nile 为 `tron:3448148188`）为规范标识，历史十六进制仅作输入别名，双方默认报价/注册键一致。这证明授权互通，不是跨 SDK 完整 HTTP 实付或链上结算证明；详见下方验证范围。旧版 `1.x` 仅配置十六进制标识，不能直接处理十进制报价。
+**互操作边界：** 已用实际发布的 `@bankofai/x402-tron@2.1.2` 与官方 `@x402/core@2.29.0` 完成离线双向授权测试。该版本与本项目同样以十进制 CAIP-2（例如 Nile 为 `tron:3448148188`）为规范标识，历史十六进制仅作输入别名，双方默认报价/注册键一致。离线测试证明授权互通；上游 JS 付款端 → Go 资源端/facilitator 方向已完成 Nile 实付，见下方 Nile 实链验证。旧版 `1.x` 仅配置十六进制标识，不能直接处理十进制报价。
 
 ## 客户端快速体验
 
@@ -129,7 +129,9 @@ func paymentHTTPClient(contracts exact.Config, signer *exact.EOASigner, asset, p
 
 第三次使用干净提交`3f1beac5d027598a30e1a03b2b2503880c7d06c5`实际归档/解包后的三个程序独立启动，复用同一专用日志库和剩余有限授权，启用`X402_RPC_BATCH=true`。结算[ea6149a0…1f9249d](https://nile.tronscan.org/#/transaction/ea6149a03be449d61d31770edfba94c2d2690299d6c688a004b5a51431f9249d)固化于块`71935578`后返回HTTP200；服务端与facilitator均停止并以新进程重启，payer无需私钥，用原header恢复同一交易，原603字节摘要及前两笔记录完全不变。运行数据库角色没有DDL/DELETE/TRUNCATE权限，结束后禁用登录，服务全部停止。独立只读审计核对唯一精确Transfer、三笔累计0.003测试USDT、手续费18.711测试TRX、allowance为0；没有追加授权。
 
-这完成了v0.1测试网候选范围的Nile实付、中断恢复和实际打包三端接入。它使用已有数据库/已核验合约和本机loopback服务，不是空白机器安装、独立服务器TLS运维或生产验收；公共RPC仍可能因链头变化拒绝新付款。Shasta/主网、上游SDK端到端实付、长时稳定性及独立安全审计仍未验证。私钥、原始授权和本机运维材料不公开，不提供可照搬的生产资金配置。候选包可自行构建；已发布测试网候选版本 `v0.1.0-rc.3`（GitHub prerelease），尚无稳定版本。
+2026-11-11 完成**跨 SDK 实付**：付款端为实际发布的上游 `@bankofai/x402-tron@2.1.2` + 官方 `@x402/core@2.29.0`（仅调用公开 API，签名器不提供链上读写），访问由干净提交 `1bf1019` 以 Go 1.26.11、官方 Go SDK v2.30.0 构建的 Go 资源端与 Go facilitator，使用新建专用日志库与最小权限运行角色。先限额授权 0.002 测试 USDT（手续费 0），再由真实 402 报价生成并完成两笔 0.001 测试 USDT 付款：[da6c5611…71d4b82](https://nile.tronscan.org/#/transaction/da6c5611d3e7741e930f63ac775bd31e45443a2f8d6cf0f3ed35d6c0571d4b82)（块 `72617132`）与 [2bb10acb…7d83090](https://nile.tronscan.org/#/transaction/2bb10acb83ed2d53a023f55fa6b2cee74ce1dfa23c7f896fe164a38747d83090)（块 `72617154`），均在固化核验并落库后才返回 HTTP 200。独立只读审计：付款方 −0.002、收款方 +0.002 测试 USDT，allowance 归零，两笔结算费各 5.737 测试 TRX。这证明上游 JS 付款端 → Go 资源端/facilitator 方向的完整 HTTP 实付互通；反方向（Go 付款端 → 上游 facilitator）未做实付。
+
+这完成了v0.1测试网候选范围的Nile实付、中断恢复和实际打包三端接入。它使用已有数据库/已核验合约和本机loopback服务，不是空白机器安装、独立服务器TLS运维或生产验收；公共RPC仍可能因链头变化拒绝新付款。Shasta/主网、Go 付款端 → 上游 facilitator 方向的实付、长时稳定性及独立安全审计仍未验证。私钥、原始授权和本机运维材料不公开，不提供可照搬的生产资金配置。候选包可自行构建；已发布测试网候选版本 `v0.1.0-rc.3`（GitHub prerelease），尚无稳定版本。
 
 ## 自建 facilitator HTTP 示例
 

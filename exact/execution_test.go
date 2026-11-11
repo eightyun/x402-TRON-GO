@@ -2,6 +2,8 @@ package exact_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -344,4 +346,64 @@ func TestExecutionTLSRedirectAndCancellation(t *testing.T) {
 	if _, err := executionClient(t, config).Lookup(context.Background(), signed.ID); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("节点总预算未生效：%v", err)
 	}
+}
+
+// FuzzExecutionLookupBody 用任意节点响应主体调用公开 Lookup：不得 panic；只有空对象可判为未找到，
+// 只有 txID 与 raw_data_hex 摘要都匹配原 txid 时才可判为已找到，其余一律返回错误且 Found=false。
+func FuzzExecutionLookupBody(f *testing.F) {
+	fixture := loadSettlementVector(f)
+	var body atomic.Pointer[[]byte]
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if r.URL.Path == "/wallet/getblockbynum" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"blockID": syntheticGenesis()})
+			return
+		}
+		_, _ = w.Write(*body.Load())
+	}))
+	f.Cleanup(server.Close)
+	client, err := exact.NewExecutionClient(executionConfig(server.URL))
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, seed := range []string{
+		`{"txID":"` + fixture.TransactionID + `","raw_data_hex":"` + fixture.RawDataHex + `"}`,
+		`{"txID":"` + fixture.TransactionID + `","raw_data_hex":"` + fixture.RawDataHex + `","raw_data":{"contract":[]}}`,
+		`{}`, ` { } `, `{"error":null}`, `{"Error":"x"}`, `{"txID":"` + fixture.TransactionID + `","raw_data_hex":"00"}`,
+		`{"txID":"` + fixture.TransactionID + `","txID":"` + fixture.TransactionID + `","raw_data_hex":"` + fixture.RawDataHex + `"}`,
+		`[]`, `null`, `{} {}`, `{"txID":1}`, ``,
+	} {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		body.Store(&data)
+		observation, err := client.Lookup(context.Background(), fixture.TransactionID)
+		if observation.TransactionID != fixture.TransactionID || observation.Network != tron.NetworkNile {
+			t.Fatal("观察结果未保留原 txid 或网络")
+		}
+		if err != nil {
+			if observation.Found {
+				t.Fatal("错误结果仍标记已找到")
+			}
+			return
+		}
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(data, &fields) != nil || fields == nil {
+			t.Fatalf("非对象主体被接受: %q", data)
+		}
+		if !observation.Found {
+			if len(fields) != 0 {
+				t.Fatalf("非空主体被判为未找到: %q", data)
+			}
+			return
+		}
+		var id, rawHex string
+		_ = json.Unmarshal(fields["txID"], &id)
+		_ = json.Unmarshal(fields["raw_data_hex"], &rawHex)
+		raw, decodeErr := hex.DecodeString(rawHex)
+		digest := sha256.Sum256(raw)
+		if id != fixture.TransactionID || decodeErr != nil || hex.EncodeToString(digest[:]) != fixture.TransactionID {
+			t.Fatalf("摘要不匹配的主体被判为已找到: %q", data)
+		}
+	})
 }
