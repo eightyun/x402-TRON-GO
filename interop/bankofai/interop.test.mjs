@@ -22,9 +22,9 @@ globalThis.fetch = denyNetwork;
 const { TronWeb, utils } = await import("tronweb");
 const { ExactTronScheme: UpstreamClient } = await import("@bankofai/x402-tron/exact/client");
 const { ExactTronScheme: UpstreamFacilitator } = await import("@bankofai/x402-tron/exact/facilitator");
-const { TRON_NILE, TRON_SHASTA, PERMIT2_ADDRESSES, X402_PERMIT2_PROXY_ADDRESSES } = await import("@bankofai/x402-tron");
-const { x402Client } = await import("@bankofai/x402-core/client");
-const { x402Facilitator } = await import("@bankofai/x402-core/facilitator");
+const { TRON_NILE, TRON_SHASTA, PERMIT2_ADDRESSES, X402_PERMIT2_PROXY_ADDRESSES, normalizeTronNetwork } = await import("@bankofai/x402-tron");
+const { x402Client } = await import("@x402/core/client");
+const { x402Facilitator } = await import("@x402/core/facilitator");
 
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 const temporary = mkdtempSync(join(tmpdir(), "x402-sdk-interop-"));
@@ -149,7 +149,7 @@ function upstreamVerifier(config, requirements, payer) {
 
 test("固定上游实际发布包版本", () => {
   for (const [path, version] of [
-    ["@bankofai/x402-tron", "1.2.0"], ["@bankofai/x402-core", "1.1.1"], ["tronweb", "6.3.0"],
+    ["@bankofai/x402-tron", "2.1.2"], ["@x402/core", "2.29.0"], ["tronweb", "6.5.1"],
   ]) {
     const metadata = JSON.parse(readFileSync(new URL(`node_modules/${path}/package.json`, import.meta.url), "utf8"));
     assert.ok(metadata.version === version, "安装版本偏离互操作验证基线");
@@ -218,14 +218,15 @@ test("Go可信域和完整accepted绑定不接受上游数据覆盖", async () =
   assert.ok(!bridge("verify", config, differentQuote, payload).valid, "Go接受替换的可信收款报价");
 });
 
-test("上游1.2.0不支持十进制网络报价：明确保留兼容边界", async () => {
-  const { config, requirements } = configuration(TRON_NILE, true);
-  const canonical = "tron:" + BigInt(TRON_NILE.split(":")[1]).toString(10);
-  const quote = { ...requirements, network: canonical };
-  assert.ok(PERMIT2_ADDRESSES[canonical] === undefined, "上游能力发生变化，需要复核兼容性声明");
-  await assert.rejects(() => upstreamPayload(quote), /No Permit2 contract address configured/);
-  const generated = bridge("create", { ...config, network: canonical }, quote);
-  assert.ok(generated.valid, "Go规范十进制报价创建失败");
-  const upstream = upstreamVerifier(config, requirements, generated.payer);
-  assert.ok(!(await upstream.verify(generated.payload, quote)), "上游实际接受十进制报价，应重新核对测试基线");
+test("上游2.x与Go默认采用相同十进制网络标识，十六进制仅为输入别名", () => {
+  // 与Go根包NetworkNile/NetworkShasta保持一致；上游变化时必须重新复核兼容性声明。
+  for (const [canonical, legacy, upstream] of [
+    ["tron:3448148188", "tron:0xcd8690dc", TRON_NILE], ["tron:2494104990", "tron:0x94a9059e", TRON_SHASTA],
+  ]) {
+    assert.ok(upstream === canonical, "上游规范网络标识偏离Go默认十进制报价");
+    assert.ok(normalizeTronNetwork(legacy) === canonical, "上游未将历史十六进制别名规范化为十进制");
+    const { config, requirements } = configuration(canonical, true);
+    const generated = bridge("create", config, requirements);
+    assert.ok(generated.valid && generated.payload.accepted.network === canonical, "Go授权未保留规范十进制报价");
+  }
 });
