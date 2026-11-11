@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # 每周定时重跑，及时发现依赖或标准库新披露的漏洞，即使没有新提交。
+  schedule:
+    - cron: "17 2 * * 1"
 
 permissions:
   contents: read
@@ -53,6 +56,9 @@ jobs:
           fi
       - name: Verify modules
         run: go mod verify
+      - name: Scan reachable known vulnerabilities
+        # 固定扫描器版本，go run 不写入项目 go.mod；只扫描实际交付的包，可达漏洞即失败。
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 . ./exact ./exact/postgres ./examples/client ./examples/payer ./internal/examplekeys ./examples/server ./examples/facilitator ./examples/deployment ./interop/bankofai/bridge ./tools/package
       - name: Verify SDK consumption from an isolated application module
         shell: bash
         env:
