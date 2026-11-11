@@ -11,13 +11,13 @@
 在自己的 Go 1.26.10+ 项目中执行（上游官方 x402 Go SDK 要求）：
 
 ```bash
-go get github.com/eightyun/x402-tron-go/exact@v0.1.0-rc.2
+go get github.com/eightyun/x402-tron-go/exact@v0.1.0-rc.3
 
 # 仅自建持久化 facilitator 才需要；普通付款端/资源端不需要它。
-go get github.com/eightyun/x402-tron-go/exact/postgres@v0.1.0-rc.2
+go get github.com/eightyun/x402-tron-go/exact/postgres@v0.1.0-rc.3
 ```
 
-当前为测试网候选版本 [`v0.1.0-rc.2`](https://github.com/eightyun/x402-tron-go/releases/tag/v0.1.0-rc.2)，尚无稳定版本；RC 不是稳定 API 兼容承诺。`v0.1.0-rc.1` 依赖含已知 SQL 注入漏洞的 pgx v5.7.6，请升级；并使用最新 Go 1.26 补丁版编译，以获得标准库安全修复。需要未发布改动时可用`@main`，它会解析成写入应用`go.mod/go.sum`的固定伪版本，不是在运行时追踪分支。应安装实际导入的子包：只`go get`标准库根工具包，不一定补齐`exact`所需的依赖校验。
+当前为测试网候选版本 [`v0.1.0-rc.3`](https://github.com/eightyun/x402-tron-go/releases/tag/v0.1.0-rc.3)，尚无稳定版本；RC 不是稳定 API 兼容承诺。`v0.1.0-rc.1`/`rc.2` 依赖含已知漏洞的 pgx 或 x/crypto 版本，请升级；本版本起最低要求 Go 1.26.10（上游 SDK 要求），建议使用最新 1.26 补丁版编译以获得标准库安全修复。需要未发布改动时可用`@main`，它会解析成写入应用`go.mod/go.sum`的固定伪版本，不是在运行时追踪分支。应安装实际导入的子包：只`go get`标准库根工具包，不一定补齐`exact`所需的依赖校验。
 
 | 导入路径 | 职责 | 接入方需要什么 |
 | --- | --- | --- |
@@ -129,7 +129,7 @@ func paymentHTTPClient(contracts exact.Config, signer *exact.EOASigner, asset, p
 
 第三次使用干净提交`3f1beac5d027598a30e1a03b2b2503880c7d06c5`实际归档/解包后的三个程序独立启动，复用同一专用日志库和剩余有限授权，启用`X402_RPC_BATCH=true`。结算[ea6149a0…1f9249d](https://nile.tronscan.org/#/transaction/ea6149a03be449d61d31770edfba94c2d2690299d6c688a004b5a51431f9249d)固化于块`71935578`后返回HTTP200；服务端与facilitator均停止并以新进程重启，payer无需私钥，用原header恢复同一交易，原603字节摘要及前两笔记录完全不变。运行数据库角色没有DDL/DELETE/TRUNCATE权限，结束后禁用登录，服务全部停止。独立只读审计核对唯一精确Transfer、三笔累计0.003测试USDT、手续费18.711测试TRX、allowance为0；没有追加授权。
 
-这完成了v0.1测试网候选范围的Nile实付、中断恢复和实际打包三端接入。它使用已有数据库/已核验合约和本机loopback服务，不是空白机器安装、独立服务器TLS运维或生产验收；公共RPC仍可能因链头变化拒绝新付款。Shasta/主网、上游SDK端到端实付、长时稳定性及独立安全审计仍未验证。私钥、原始授权和本机运维材料不公开，不提供可照搬的生产资金配置。候选包可自行构建；已发布测试网候选版本 `v0.1.0-rc.2`（GitHub prerelease），尚无稳定版本。
+这完成了v0.1测试网候选范围的Nile实付、中断恢复和实际打包三端接入。它使用已有数据库/已核验合约和本机loopback服务，不是空白机器安装、独立服务器TLS运维或生产验收；公共RPC仍可能因链头变化拒绝新付款。Shasta/主网、上游SDK端到端实付、长时稳定性及独立安全审计仍未验证。私钥、原始授权和本机运维材料不公开，不提供可照搬的生产资金配置。候选包可自行构建；已发布测试网候选版本 `v0.1.0-rc.3`（GitHub prerelease），尚无稳定版本。
 
 ## 自建 facilitator HTTP 示例
 
