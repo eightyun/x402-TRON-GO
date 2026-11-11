@@ -11,13 +11,13 @@ An independent TRON adapter SDK for x402: clients/agents, API resource servers a
 In your own Go 1.26+ project:
 
 ```bash
-go get github.com/eightyun/x402-tron-go/exact@main
+go get github.com/eightyun/x402-tron-go/exact@v0.1.0-rc.1
 
 # Optional: only for a self-managed durable facilitator, not ordinary buyers/resource servers.
-go get github.com/eightyun/x402-tron-go/exact/postgres@main
+go get github.com/eightyun/x402-tron-go/exact/postgres@v0.1.0-rc.1
 ```
 
-There is no stable tag yet. `@main` resolves to a fixed pseudo-version recorded in your application's `go.mod/go.sum`; it does not track the branch at runtime. Replace `main` with a reviewed full commit for reproducibility. Install the package actually imported: fetching only the standard-library root package need not populate dependency checksums for `exact`.
+The current testnet release candidate is [`v0.1.0-rc.1`](https://github.com/eightyun/x402-tron-go/releases/tag/v0.1.0-rc.1); there is no stable release, and an RC is not a stable API compatibility promise. For unreleased changes use `@main`, which resolves to a fixed pseudo-version recorded in your application's `go.mod/go.sum`; it does not track the branch at runtime. Install the package actually imported: fetching only the standard-library root package need not populate dependency checksums for `exact`.
 
 | Import | Responsibility | Application requirements |
 | --- | --- | --- |
@@ -128,7 +128,7 @@ A second real payment verified pending-interruption recovery: settlement [3a3398
 
 The third payment ran three independent executables extracted from actual archives built from clean commit `3f1beac5d027598a30e1a03b2b2503880c7d06c5`, using the same dedicated journal, remaining limited allowance and `X402_RPC_BATCH=true`. Settlement [ea6149a0…1f9249d](https://nile.tronscan.org/#/transaction/ea6149a03be449d61d31770edfba94c2d2690299d6c688a004b5a51431f9249d) solidified in block `71935578` before HTTP200 delivery. The resource server and facilitator both stopped and restarted as new processes; payer recovery loaded no key and returned the same transaction from the original header, retaining the 603 signed bytes/hash and both earlier records. The database runtime role lacked DDL/DELETE/TRUNCATE permissions; login was disabled and services stopped afterward. Independent read-only audit verified the exact Transfer, 0.003 test USDT total across three payments, 18.711 test TRX total fees, and zero remaining allowance, without another approval.
 
-This completes the v0.1 testnet-candidate scope for Nile payments, interruption recovery and packaged three-process integration. It uses existing schema/independently checked contracts and local loopback services, not blank-machine installation, independent-server TLS operations or production acceptance. Public-RPC head drift can still reject new payments. Shasta/Mainnet, live end-to-end upstream-SDK payments, long-running stability and independent security remain unvalidated. Private keys, original authorizations and local operational materials are not published; no copy-ready production-funds configuration is supplied. Candidate packages can be built locally; no stable tag or GitHub release has been created.
+This completes the v0.1 testnet-candidate scope for Nile payments, interruption recovery and packaged three-process integration. It uses existing schema/independently checked contracts and local loopback services, not blank-machine installation, independent-server TLS operations or production acceptance. Public-RPC head drift can still reject new payments. Shasta/Mainnet, live end-to-end upstream-SDK payments, long-running stability and independent security remain unvalidated. Private keys, original authorizations and local operational materials are not published; no copy-ready production-funds configuration is supplied. Candidate packages can be built locally; testnet release candidate `v0.1.0-rc.1` is published as a GitHub prerelease, with no stable release yet.
 
 ## Self-hosted facilitator HTTP example
 
@@ -358,7 +358,7 @@ External signing holds one database connection and a row lock: use short signing
 
 ## Development
 
-Requires Go 1.26+. CI uses 1.26.x. No release exists; public APIs may change.
+Requires Go 1.26+. CI uses 1.26.x. Only a testnet release candidate exists; public APIs may change.
 
 ```bash
 go mod verify
