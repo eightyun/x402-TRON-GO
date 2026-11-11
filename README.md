@@ -27,7 +27,7 @@ go get github.com/eightyun/x402-tron-go/exact/postgres@v0.1.0-rc.3
 
 [客户端/资源端可运行API示例](exact/example_test.go)和[进程内facilitator示例](exact/postgres/example_test.go)会随测试执行，不要求使用`examples`里的main程序。官方职责划分见[x402客户端指南](https://docs.x402.org/getting-started/quickstart-for-buyers)与[facilitator说明](https://docs.x402.org/core-concepts/facilitator)；公共facilitator是否支持TRON必须另行核对，不能把EVM/Solana端点直接当作TRON结算端。
 
-仓库外消费回归在独立模块[integration/consumer](integration/consumer/go.mod)：固定公开伪版本、没有`replace`，覆盖Nile/Shasta离线签名/报价/限额、三端官方接口及构造不签名/不连接数据库。可在该目录执行`GOWORK=off go test -race -count=1 .`。CI另复制到临时目录并仅在那里将依赖替换为当前PR源码，验证未发布改动的兼容性；这与实际从公网安装固定版本是不同的证据，不把本地替换当作公网安装通过。
+仓库外消费回归在独立模块[integration/consumer](integration/consumer/go.mod)：固定已发布的`v0.1.0-rc.3`、没有`replace`，覆盖Nile/Shasta离线签名/报价/限额、三端官方接口及构造不签名/不连接数据库。可在该目录执行`GOWORK=off go test -race -count=1 .`。CI另复制到临时目录并仅在那里将依赖替换为当前PR源码，验证未发布改动的兼容性；这与实际从公网安装固定版本是不同的证据，不把本地替换当作公网安装通过。
 
 ## 开箱即用进度
 
