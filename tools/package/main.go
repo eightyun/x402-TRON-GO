@@ -353,7 +353,7 @@ func run(ctx context.Context, output, matrix string) error {
 			}
 			items = append(items, entry{bundle + "/bin/" + name, b, 0755})
 		}
-		for name, source := range map[string]string{"LICENSE": "LICENSE", "THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md", "README.md": "README.md", "README.en.md": "README.en.md", ".env.example": ".env.example", "schema.sql": "exact/postgres/schema.sql", "upgrade_confirmation.sql": "exact/postgres/upgrade_confirmation.sql"} {
+		for name, source := range map[string]string{"LICENSE": "LICENSE", "THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md", "README.md": "README.md", "README.zh-CN.md": "README.zh-CN.md", "SECURITY.md": "SECURITY.md", "THREAT_MODEL.md": "THREAT_MODEL.md", "guide/client.md": "guide/client.md", "guide/client.zh-CN.md": "guide/client.zh-CN.md", "guide/resource-server.md": "guide/resource-server.md", "guide/resource-server.zh-CN.md": "guide/resource-server.zh-CN.md", "guide/facilitator.md": "guide/facilitator.md", "guide/facilitator.zh-CN.md": "guide/facilitator.zh-CN.md", "guide/components.md": "guide/components.md", "guide/components.zh-CN.md": "guide/components.zh-CN.md", "guide/validation.md": "guide/validation.md", "guide/validation.zh-CN.md": "guide/validation.zh-CN.md", ".env.example": ".env.example", "schema.sql": "exact/postgres/schema.sql", "upgrade_confirmation.sql": "exact/postgres/upgrade_confirmation.sql"} {
 			b, e := command(ctx, root, "git", "show", sha+":"+source)
 			if e != nil {
 				return e
