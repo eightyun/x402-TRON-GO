@@ -2,31 +2,98 @@
 
 [简体中文](resource-server.zh-CN.md) | English
 
-How an API resource server quotes TRON payments and gates handlers on trusted settlement.
+This guide shows how an API resource server quotes TRON payments and runs a handler only after a trusted facilitator confirms settlement. It also describes the configuration of the example server.
 
-## Integration and example server
+## Registering the mechanism
 
-Register `exact.NewServer(exact.ServerConfig{Network: network, Asset: asset, PayTo: payTo})` with the official resource server. One trusted network/asset/recipient; no database or wallet key. `ParsePrice` accepts canonical positive atomic-unit strings (`"1000"`), official `x402.AssetAmount` values or strict equivalent maps. **No `$0.01`, floating-point prices or implicit exchange rates.**
+Register `exact.NewServer` with the official x402 resource server:
 
-Only the official `upfront` flow is enabled. Quotes include `assetTransferMethod: permit2` and `paymentFlow: upfront`; handlers run only after a trusted facilitator reports successful settlement. Pending, unknown, rejected, failed or timed-out results must not be reported as successful. Upfront does not first call `/verify`: **`/settle` must perform complete authorization/preflight, durable submission and solidified execution/received-token verification itself**. Broadcast acceptance is not success.
+```go
+exact.NewServer(exact.ServerConfig{Network: network, Asset: asset, PayTo: payTo})
+```
 
-Startup requires `/supported` to advertise matching v2/exact/canonical network and `permit2` in `extra.supportedAssetTransferMethods`. This existing TRON ecosystem capability field is not copied to payment quotes and is not contract or settlement proof. Independently verify matching client/facilitator contract deployments.
+- Each mechanism serves one trusted network, one asset and one recipient.
+- The resource server needs no database and no wallet key.
 
-The runnable [server example](../examples/server/main.go) uses official net/http middleware. Set the following environment variables, then run `go run ./examples/server`:
+## Prices
 
-| Variable | Meaning |
-| --- | --- |
-| `X402_NETWORK` | Defaults to Nile: `tron:3448148188` |
-| `X402_ASSET` | Required trusted token address |
-| `X402_PAY_TO` | Required merchant recipient |
-| `X402_PRICE_ATOMIC` | Required positive atomic-unit price |
-| `X402_FACILITATOR_URL` | Required trusted HTTPS base URL; no userinfo/query/fragment |
-| `X402_FACILITATOR_TOKEN` | Required for this project's service; official `AuthProvider` sends Bearer to all three endpoints; optional for unauthenticated third-party services |
-| `X402_ALLOW_INSECURE_LOCAL_FACILITATOR_HTTP` | Off by default; explicit `true` allows HTTP only to literal loopback IPs, not `localhost` or public addresses |
-| `X402_LISTEN_ADDR` | Defaults to `127.0.0.1:8080` |
+`ParsePrice` accepts these formats:
 
-Explicit initialization and quote validation happen before listening; failures stop startup. `GET /resource` returns 402 without payment. HEAD is rejected to prevent Go GET-route HEAD matching from bypassing payment. Includes bounded startup/settlement/HTTP timeouts, no upstream redirects, bounded headers and graceful shutdown. External deployment needs TLS ingress and appropriate authentication. Use official `AuthProvider` for facilitator credentials, never URL tokens.
+- A canonical, positive string in atomic units, such as `"1000"`.
+- An official `x402.AssetAmount` value.
+- A map strictly equivalent to `x402.AssetAmount`.
 
-Remote requests have a 200-second budget covering the mechanism's maximum 180 seconds. Middleware allows 410 seconds and HTTP writes 420 seconds, covering one official identical-payload pending retry. Startup discovery remains bounded to 30 seconds. Match proxy/caller budgets too; timeout does not authorize another payment.
+It does **not** accept dollar prices such as `$0.01`, floating-point prices or implicit exchange rates.
 
-The [self-hosted facilitator](facilitator.md) requires independently provisioned/verified contracts and nodes; no public facilitator address is assumed. Automated HTTP integration tests use synthetic chain state/receipts. Separate live-program and packaged-example exercises are recorded in [Nile live payments](validation.md#nile-live-payments); **neither is production acceptance**.
+## Payment flow
+
+Only the official `upfront` flow is enabled. Every quote includes `assetTransferMethod: permit2` and `paymentFlow: upfront`.
+
+Your handler runs only after a trusted facilitator reports successful settlement. A result that is pending, unknown, rejected, failed or timed out must never be reported as successful.
+
+The `upfront` flow does not call `/verify` first. The facilitator's `/settle` endpoint must therefore do all of the following itself:
+
+- Verify the full authorization and run preflight checks.
+- Record the submission durably.
+- Confirm that the transaction is solidified and that the token transfer was actually received.
+
+> [!WARNING]
+> Acceptance of a broadcast is not success. The facilitator must not report success after broadcasting alone.
+
+## Facilitator discovery
+
+At startup, the facilitator's `/supported` response must advertise:
+
+- `x402Version: 2`
+- `scheme: exact`
+- The canonical network identifier that matches your configuration.
+- `permit2` in the `extra.supportedAssetTransferMethods` array.
+
+`extra.supportedAssetTransferMethods` is an existing capability field from the TRON ecosystem. It is not copied into payment quotes. The advertisement is not proof of trusted contracts or of settlement. Verify independently that the client and the facilitator use matching contract deployments.
+
+## Example server
+
+The runnable [server example](../examples/server/main.go) uses the official `net/http` middleware. Set the environment variables below, then run `go run ./examples/server`.
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `X402_NETWORK` | No | Network identifier. Defaults to Nile, `tron:3448148188`. |
+| `X402_ASSET` | Yes | Address of the trusted token. |
+| `X402_PAY_TO` | Yes | Merchant recipient address. |
+| `X402_PRICE_ATOMIC` | Yes | Positive price in atomic units. |
+| `X402_FACILITATOR_URL` | Yes | Base HTTPS URL of the trusted facilitator. It must not contain user info, a query or a fragment. |
+| `X402_FACILITATOR_TOKEN` | For this project's facilitator | Sent as a Bearer token to all three facilitator endpoints through the official `AuthProvider`. Optional for third-party facilitators that do not require authentication. |
+| `X402_ALLOW_INSECURE_LOCAL_FACILITATOR_HTTP` | No | Off by default. Only the explicit value `true` allows plain HTTP, and only to literal loopback IP addresses. `localhost` and public addresses are still rejected. |
+| `X402_LISTEN_ADDR` | No | Listen address. Defaults to `127.0.0.1:8080`. |
+
+### Behavior
+
+- The server initializes the mechanism and validates the quote before it starts listening. Any configuration or capability failure stops startup.
+- `GET /resource` returns `402` when no payment is attached.
+- `HEAD` requests are rejected. In Go, a `GET` route also matches `HEAD`, which would otherwise bypass the payment gate.
+- Startup, settlement and HTTP timeouts are all bounded.
+- Redirects from the facilitator are not followed.
+- Request header size is bounded.
+- The server shuts down gracefully.
+
+For external deployment, put the server behind TLS ingress and add appropriate authentication. Pass facilitator credentials through the official `AuthProvider`. Never put tokens in the URL.
+
+### Timeouts
+
+| Budget | Value | Purpose |
+| --- | --- | --- |
+| Remote facilitator request | `200` seconds | Covers the mechanism's maximum of `180` seconds. |
+| Payment middleware | `410` seconds | Covers one official retry of a pending result with the identical payload and the original txid. |
+| HTTP write | `420` seconds | Covers the same retry, with headroom over the middleware budget. |
+| Startup discovery | `30` seconds | Bounds the `/supported` check at startup. |
+
+Reverse proxies and callers must use matching budgets.
+
+> [!WARNING]
+> A timeout does not mean the payment failed, and it does not authorize another payment. Do not create a new authorization after a timeout.
+
+## Limits
+
+- The [self-hosted facilitator](facilitator.md) needs contracts and nodes that you provision and verify yourself. No public facilitator address is assumed.
+- Automated HTTP integration tests use synthetic chain state and receipts.
+- Separate live-program and packaged-example runs are recorded in [Nile live payments](validation.md#nile-live-payments). **Neither counts as production acceptance.**

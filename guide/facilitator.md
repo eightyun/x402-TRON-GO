@@ -2,105 +2,413 @@
 
 [简体中文](facilitator.zh-CN.md) | English
 
-Running the durable PostgreSQL-backed facilitator: embedding it in-process, exposing it over HTTP, the testnet payer example, the settlement journal and the official mechanism contract.
+This guide explains how to run the durable, PostgreSQL-backed facilitator from `exact/postgres`. It covers embedding it in your resource server, serving it over HTTP, the testnet payer example, the official mechanism contract and the settlement journal that makes recovery safe.
 
 ## Deployment options
 
-### Embed the library in your application first
+| Option | Use it when | Entry point |
+| --- | --- | --- |
+| Embed in-process | The facilitator runs inside your resource server | `postgres.NewLocalClient` |
+| Serve over HTTP | The facilitator runs as a separate service | `postgres.NewHTTPHandler` |
+| Existing facilitator | You already operate a separate facilitator | Official `HTTPFacilitatorClient` |
 
-`postgres.NewFacilitator(store, config)` implements the official mechanism. Pass it to `postgres.NewLocalClient(mechanism, 8)`, then supply the result to official `x402.WithFacilitatorClient(client)` inside your resource server. No facilitator URL, Bearer token, listener or separate service is required. Create the store with `postgres.New(pool, config.Preflight.Authorization)`; the application manages the pool and transaction signer, and an administrator explicitly applies the schema beforehand. The adapter reuses the official core and existing settlement/recovery rather than duplicating protocol or weakening checks.
+The HTTP executables in `examples/` are optional. You do not need them to import the SDK.
 
-The local entry accepts v2 with a 64KiB combined-input bound, rejecting duplicate/ambiguous keys, unknown structural fields and trailing JSON. `maxConcurrent=0` defaults to eight; 1–64 is accepted. Full capacity returns `ErrLocalClientCapacity` without an unbounded queue. This limit is per client, not aggregate spending or application authentication. Cancellation/deadlines preserve context semantics. Failed/pending payments do not permit delivery; recovery uses only the original authorization and the same durable journal. Requests must not select nodes, signers or trusted contracts. For an existing separate facilitator, continue using the official `HTTPFacilitatorClient`.
+### Embed in your application (recommended)
 
-The HTTP executables below are optional examples, not prerequisites for importing the SDK.
+1. Create the store with `postgres.New(pool, config.Preflight.Authorization)`. An administrator must apply the schema beforehand (see [Durable settlement journal](#durable-settlement-journal)).
+2. Create the mechanism with `postgres.NewFacilitator(store, config)`. It implements the official facilitator mechanism.
+3. Wrap it with `postgres.NewLocalClient(mechanism, 8)`.
+4. Pass the result to the official `x402.WithFacilitatorClient(client)` in your resource server.
 
-### Real payment client and identical-request recovery
+No facilitator URL, Bearer token, listener or separate service is required. Your application manages the database pool and the transaction signer. The adapter reuses the official core and the existing settlement and recovery logic. It does not duplicate protocol code or weaken any check.
 
-The [payer example](../examples/payer/main.go) is an explicitly enabled Linux/macOS testnet client, separate from the offline-handshake-only `examples/client`. Use [.env.example](../.env.example) to configure trusted network/Permit2/proxy, token/recipient, `X402_MAX_AMOUNT_ATOMIC`, `X402_PAYER_ADDRESS`, `X402_PAYER_KEY_FILE` and resource URL. The template is not loaded automatically. Never commit actual credentials, keys or authorizations.
+The in-process client behaves as follows:
 
-Pre-create a service-user-owned **0700 state directory under privately controlled parents**, set its absolute path as `X402_PAYMENT_STATE_DIR`, then explicitly set `X402_ENABLE_TESTNET_PAYMENTS=true`:
+- It accepts x402 v2 only, with a combined input limit of 64 KiB.
+- It rejects duplicate or ambiguous keys, unknown structural fields and trailing JSON.
+- `maxConcurrent` accepts 1 to 64. A value of `0` defaults to 8.
+- When all slots are busy, it returns `ErrLocalClientCapacity` immediately. There is no unbounded queue.
+- Cancellation and deadlines keep their normal `context` semantics.
+- Requests cannot select nodes, signers or trusted contracts.
+
+The concurrency limit applies to this client only. It is not a spending budget and not application authentication.
+
+A failed or pending payment never permits delivery. Recovery uses only the original authorization and the same durable journal.
+
+### Serve over HTTP
+
+```go
+handler, err := postgres.NewHTTPHandler(mechanism, postgres.HTTPConfig{BearerToken: token, MaxConcurrent: 8})
+```
+
+The handler registers the official SDK core and exposes three endpoints: `GET /supported`, `POST /verify` and `POST /settle`.
+
+- Every endpoint requires a Bearer token of 32 to 256 bytes of non-whitespace ASCII.
+- JSON bodies are limited to 64 KiB.
+- Duplicate or ambiguous keys, unknown envelope fields, trailing values and non-v2 requests are rejected.
+- Concurrent verification and settlement defaults to 8 and accepts 1 to 64.
+- Requests over the limit receive `503` without any signing or broadcasting.
+
+The concurrency limit is per process. It is not an aggregate spending budget.
+
+### Run the example facilitator service
+
+The [runnable example](../examples/facilitator/main.go) wraps `NewHTTPHandler` in a service. It targets Linux and macOS. It allows only Nile and Shasta, listens only on a literal loopback address, and **rejects mainnet and public binding**.
+
+Configure these variables, then run `go run ./examples/facilitator`:
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `X402_NETWORK` | No | Defaults to Nile. Shasta is also allowed. |
+| `X402_DATABASE_URL` | Yes | Isolated journal database. Use a trusted `search_path`, a least-privilege runtime role, and TLS for remote connections. |
+| `X402_EXECUTOR_KEY_FILE` | Yes | Absolute path to a regular file owned by the service user with mode 0400 or 0600. It contains 64 hex characters, optionally followed by one newline. A symlink as the final path component is rejected. |
+| `X402_FACILITATOR_TOKEN` | Yes | Must match the resource server. Inject it through the deployment environment. Never put it in source code, URLs or logs. |
+| `X402_PERMIT2_ADDRESS`, `X402_PROXY_ADDRESS` | Yes | Independently verified deployments. There are no default addresses. |
+| `X402_PERMIT2_CODE_HASH`, `X402_PROXY_CODE_HASH` | Yes | Trusted Keccak-256 hashes of the runtime bytecode: `0x` followed by 32 bytes. |
+| `X402_JSON_RPC_URL` | Yes | Trusted HTTPS JSON-RPC endpoint. |
+| `X402_RPC_BATCH` | No | Defaults to `false`. Only the literal value `true` batches independent reads. The node must support batching; there is no fallback. |
+| `X402_NATIVE_NODE_URL` | Yes | HTTPS root URL of a native node. The `wallet` and `walletsolidity` routes are required. |
+| `X402_GENESIS_BLOCK_ID` | Yes | Independently verified full genesis block ID. |
+| `X402_NODE_API_KEY` | No | Service credential for these nodes. It is never taken from requests. |
+| `X402_ASSET`, `X402_PAY_TO` | Yes | Fixed token and recipient. |
+| `X402_MAX_AMOUNT_ATOMIC` | Yes | Per-payment cap as a positive integer in atomic units. |
+| `X402_FEE_LIMIT_SUN` | Yes | Positive per-transaction fee cap. It is **not** an aggregate gas budget. |
+| `X402_SETTLEMENT_TIMEOUT` | No | Defaults to `90s`. Accepts 1 second to 3 minutes. The original transaction lifetime is fixed at 60 seconds. Transactions already submitted remain recoverable after the timeout. |
+| `X402_MAX_CONCURRENT` | No | Defaults to 8. |
+| `X402_FACILITATOR_LISTEN_ADDR` | No | Defaults to `127.0.0.1:8081`. |
+
+#### Database setup
+
+- An administrator applies [schema.sql](../exact/postgres/schema.sql) explicitly, using a separate migration role.
+- Existing tables need the upgrade described in [Durable settlement journal](#durable-settlement-journal).
+- Do not put database URLs or passwords in command-line arguments.
+- The runtime role should not have DDL, `DELETE` or `TRUNCATE` privileges.
+
+#### What startup checks
+
+Startup checks the configuration, database connectivity and that the current-version columns are readable.
+
+Startup **does not** create or migrate tables, inspect every constraint, check live deployments, sign, approve tokens or submit payments. It is not a full deployment acceptance test. Verify these yourself:
+
+- the complete database schema;
+- the executor's default-owner permission, TRX balance and energy;
+- the token's semantics;
+- the payer's Permit2 allowance.
+
+#### Connect the example resource server
+
+For a local integration, set these on the resource server and run `go run ./examples/server`:
+
+- `X402_FACILITATOR_URL=http://127.0.0.1:8081`
+- the same `X402_FACILITATOR_TOKEN`
+- `X402_ALLOW_INSECURE_LOCAL_FACILITATOR_HTTP=true`
+
+Cross-machine deployments require trusted TLS ingress that forwards to the loopback listener, ingress rate limits and aggregate spending budgets.
+
+#### Key handling
+
+- The example loads only the explicitly configured key file. It does not discover or modify existing wallets.
+- The key stays in process memory and is cleared on shutdown on a best-effort basis. This is not HSM or MPC security.
+- SDK integrations can supply an external signer through `FacilitatorConfig.Signer` instead.
+
+#### Responses and shutdown
+
+- Responses use the official formats.
+- An unknown or unconfirmed result is never reported as success.
+- HTTP failures keep the `settlement_pending` reason and the original txid, so the identical payload can be used for recovery.
+- A disconnect or a `503` does not prove that the payment failed. Never generate a replacement authorization.
+- `SIGTERM` drains requests that were already accepted. Interrupted work recovers from the same journal. There is no automatic background executor and no automatic rebroadcast.
+
+## Testnet payer example
+
+The [payer example](../examples/payer/main.go) makes real testnet payments. It must be enabled explicitly and runs on Linux and macOS. It is separate from `examples/client`, which only performs an offline handshake.
+
+### Configure
+
+Use [.env.example](../.env.example) as a template for:
+
+- the trusted network, Permit2 address and proxy address;
+- the token and recipient;
+- `X402_MAX_AMOUNT_ATOMIC`, `X402_PAYER_ADDRESS` and `X402_PAYER_KEY_FILE`;
+- the resource URL.
+
+The template is not loaded automatically. Never commit real credentials, keys or authorizations.
+
+Then prepare the state directory:
+
+1. Create a **0700 state directory owned by the service user, under parent directories that you control privately**.
+2. Set its absolute path as `X402_PAYMENT_STATE_DIR`.
+3. Set `X402_ENABLE_TESTNET_PAYMENTS=true`.
+
+### Pay and recover
 
 ```bash
 go run ./examples/payer pay
-# After disconnect, failure, pending or interruption, reuse the same directory/config; never pay again.
+# After a disconnect, failure, pending result or interruption, reuse the same directory and configuration. Never pay again.
 go run ./examples/payer recover
 ```
 
-Only GET to the fixed URL on Nile/Shasta is supported. HTTPS is the default. Plaintext requires explicit `X402_ALLOW_INSECURE_LOCAL_RESOURCE_HTTP=true` and a literal loopback IP. Mainnet, URL credentials/query/fragment and redirects are rejected. Keys must be service-user-owned 0400/0600 regular files. Recovery never loads the key.
+`pay` works in this order:
 
-`pay` exclusively persists an intent before the official client signs one authorization from the 402 quote, then saves the original `PAYMENT-SIGNATURE` before transmission. Existing intents reject another pay. `recover` checks the original configuration/signature binding and sends that same header without generating a nonce; it can complete a previously unsubmitted authorization and **is not a read-only lookup**. Private files retain each attempt and successful resource content; stdout contains restricted metadata only. HTTP success must match network, payer, amount and a nonempty txid, but relies on the trusted service rather than independent chain proof.
+1. It exclusively persists a payment intent. If an intent already exists, `pay` refuses to run.
+2. The official client signs one authorization from the 402 quote.
+3. The original `PAYMENT-SIGNATURE` header is saved before it is sent.
 
-Never clear the state directory to retry, or replace an unknown payment using another directory. An intent without a saved header requires manual investigation of whether authorization was signed/sent, not automatic re-signing. The example does not fund wallets, approve tokens, automatically retry, enforce cumulative gas budgets or deduplicate business fulfillment. Replayed resource GETs may execute the handler again.
+`recover` checks that the original configuration and signature still match. It then sends the same header again, without generating a new nonce. It can complete an authorization that was never submitted, so it **is not a read-only lookup**. Recovery never loads the payer key.
 
-`postgres.NewHTTPHandler(mechanism, postgres.HTTPConfig{BearerToken: token, MaxConcurrent: 8})` registers the official SDK core and exposes `GET /supported`, `POST /verify`, `POST /settle`. All endpoints require a 32–256-byte non-whitespace ASCII Bearer token. JSON is limited to 64 KiB; duplicate/ambiguous keys, unknown envelope fields, trailing values and non-v2 requests are rejected. Concurrent verification/settlement defaults to 8 (configurable 1–64). Excess requests receive 503 without signing/broadcasting. This is a per-process concurrency limit, not an aggregate expense budget.
+Each attempt and the content of a successful response are kept in private files. Standard output contains only restricted metadata.
 
-The [runnable example](../examples/facilitator/main.go) targets Linux/macOS, allows only Nile/Shasta and literal loopback listeners, and **rejects mainnet/public binding**. Configure these variables and run `go run ./examples/facilitator`:
+### Request restrictions
 
-| Variable | Meaning |
-| --- | --- |
-| `X402_NETWORK` | Defaults to Nile; Shasta also allowed |
-| `X402_DATABASE_URL` | Required isolated journal database; trusted `search_path`, least-privilege runtime role, TLS for remote connections |
-| `X402_EXECUTOR_KEY_FILE` | Required absolute path; service-user-owned 0400/0600 regular file containing 64 hex characters, optionally one newline; final-component symlinks rejected |
-| `X402_FACILITATOR_TOKEN` | Required, matching the resource server; inject through deployment environment, never source, URL or logs |
-| `X402_PERMIT2_ADDRESS` / `X402_PROXY_ADDRESS` | Required independently verified deployments; no default addresses |
-| `X402_PERMIT2_CODE_HASH` / `X402_PROXY_CODE_HASH` | Required trusted runtime-bytecode Keccak-256 hashes, `0x` plus 32 bytes |
-| `X402_JSON_RPC_URL` | Required trusted HTTPS JSON-RPC endpoint |
-| `X402_RPC_BATCH` | Optional, defaults to `false`; only literal `true` batches independent reads. Requires node batch support; no fallback |
-| `X402_NATIVE_NODE_URL` / `X402_GENESIS_BLOCK_ID` | Required HTTPS native-node root URL and independently verified full genesis block ID; wallet/walletsolidity routes required |
-| `X402_NODE_API_KEY` | Optional service credential for these nodes, never request-supplied |
-| `X402_ASSET` / `X402_PAY_TO` / `X402_MAX_AMOUNT_ATOMIC` | Required fixed token/recipient/per-payment cap; positive atomic-unit integer cap |
-| `X402_FEE_LIMIT_SUN` | Required positive per-transaction fee cap, **not** an aggregate gas budget |
-| `X402_SETTLEMENT_TIMEOUT` | Defaults to `90s`, accepts 1 second–3 minutes; original transaction lifetime is fixed at 60 seconds; already-submitted transactions remain recoverable |
-| `X402_MAX_CONCURRENT` / `X402_FACILITATOR_LISTEN_ADDR` | Defaults to 8 / `127.0.0.1:8081` |
+- Only `GET` to the fixed URL on Nile or Shasta is supported.
+- HTTPS is the default. Plain HTTP requires `X402_ALLOW_INSECURE_LOCAL_RESOURCE_HTTP=true` and a literal loopback IP.
+- Mainnet, credentials in the URL, query strings, fragments and redirects are rejected.
+- The key must be a regular file owned by the service user, with mode 0400 or 0600.
 
-Administrators explicitly apply [schema.sql](../exact/postgres/schema.sql) using a separate migration role; existing tables need the upgrade described below. Do not put database URLs/passwords in command-line arguments. Runtime roles should lack DDL, DELETE and TRUNCATE privileges. Startup checks configuration, database connectivity and readability of current-version columns. It **does not create/migrate tables, exhaustively inspect constraints, check live deployments, sign, approve or submit payments**. This is not full deployment acceptance: verify the complete schema, executor default-owner permissions/TRX/energy, token semantics and payer Permit2 allowance independently.
+### Receipt check
 
-For local resource-server integration set `X402_FACILITATOR_URL=http://127.0.0.1:8081`, the matching token and `X402_ALLOW_INSECURE_LOCAL_FACILITATOR_HTTP=true`, then run `go run ./examples/server`. Cross-machine deployments require trusted TLS ingress forwarding to loopback, ingress rate limits and aggregate expense budgets. The key stays in process memory and is cleared best-effort on shutdown, not HSM/MPC security. SDK integrations can supply an external `FacilitatorConfig.Signer`. The example loads only the explicitly configured key file, without discovering or modifying existing wallets.
+The payer reports success only when the response is `200` with a successful `PAYMENT-RESPONSE` receipt that matches:
 
-Responses follow official formats. Unknown/unconfirmed results remain unsuccessful; HTTP failures preserve `settlement_pending` and the original txid for identical-payload recovery. Disconnect/503 is not proof of payment failure: never generate a replacement authorization. SIGTERM drains accepted requests; interrupted work recovers from the same journal, without automatic background executors or rebroadcast.
+- the configured network;
+- the configured payer, either in Base58 form or the same address in `0x` signing form;
+- the quoted amount, if the receipt includes one (the amount field is optional in x402);
+- a nonempty txid.
 
-Upfront payment is not automatically refunded if the handler later fails; do not settle again. Applications need fulfillment idempotency, lookup and compensation. New upfront quotes require the updated client; existing no-paymentFlow quotes/signatures remain compatible. The digest does not bind paymentFlow; the verifier and official server compare accepted terms with the trusted quote to prevent stripping/downgrading it.
+This check trusts the facilitator service. It is not an independent on-chain proof.
 
-## Durable settlement journal
+### Recovery rules
 
-`exact/postgres.New` accepts a caller-managed `pgxpool.Pool` and trusted `exact.Config`. Explicitly apply [schema.sql](../exact/postgres/schema.sql), also available as `SchemaSQL`, under a dedicated trusted `search_path`; construction never runs DDL. Other packages do not require a database. No dependency on the payment gateway or merchant ledger.
+> [!WARNING]
+> Never clear the state directory to retry, and never use another directory to replace a payment whose outcome is unknown. Doing so can pay twice.
 
-**Existing journals must be upgraded first:** back up and stop old writers, explicitly run [upgrade_confirmation.sql](../exact/postgres/upgrade_confirmation.sql), also available as `UpgradeConfirmationSQL`, in the same trusted `search_path`, then start the new version. The transactional script adds confirmation columns/constraints, is repeatable and preserves historical transactions/states; roll back any open transaction after failure. Reapplying `SchemaSQL` alone does not upgrade an existing table. Runtime accounts need no DDL permissions. Do not mix old binaries unaware of success semantics or roll back by deleting columns, clearing confirmations or downgrading states.
+If an intent exists but no header was saved, investigate manually whether an authorization was signed or sent. Do not re-sign automatically.
 
-- `Reserve` verifies authorization offline, then reserves network + Permit2 + payer + canonical nonce. Identical authorizations return the original record; different digests conflict. Different proxies share the same Permit2 nonce namespace.
-- `SaveTransaction` atomically persists a single transaction ID and signed payload. Only one distinct result wins concurrent writes; identical writes are idempotent. Saved data cannot be replaced or the same network/txid assigned to another authorization.
-- `BeginBroadcast` commits `broadcast_unknown` **before** returning the sole broadcast permission and persisted transaction. Never broadcast unsaved local data or proceed without this call succeeding.
-- `RecordAccepted` records node acceptance as `pending`, never success merely from acceptance. If already `succeeded`, a matching txid/digest callback preserves success and confirmation timestamps. Timeout, process exit, missing transaction or an ambiguous database commit requires `Get` and tracking the original txid, never re-signing, replacement or automatic new payment. A crash before actual submission may also leave unknown; automatic rebroadcast or reservation release is not implemented.
-- Prefer `Submit(ctx, id, prepared, executionClient, now)` to load original bytes, validate, CAS to unknown, broadcast only that durable snapshot and persist acceptance. Concurrent/repeated submissions get only one permission; unknown/pending/succeeded never sends again. An accepted request whose ACK cannot be persisted remains unknown with the original txid. If the SQL commit itself is ambiguous, use `Get`; never assume permission remains unused.
-- `Track(ctx, id, executionClient)` performs read-only recovery using the journal txid without recreating expired authorization or a Prepare object. It never marks success or rebroadcasts based on a lookup. Bound the complete database/network operation with a caller context. No background executor, polling or queue is started.
-- `store.CheckSettlement(ctx, id, executorAddress, executionClient, now)` recovers the prepared binding from an unknown/pending/succeeded original record, checks trusted contracts/executor and the original authorization identity, then verifies the solidified transaction and exact payment. No in-memory prepared object is needed, even after expiry. It never changes state/timestamps or broadcasts; invalid/mismatched legacy bytes fail before node reads. Missing evidence or errors in a later audit do not automatically revoke durable success.
-- `store.ConfirmSettlement(ctx, id, executorAddress, executionClient, now)` internally performs that check, then atomically CASes the original authorization/txid/signed bytes from unknown/pending to `succeeded`. `Record.Confirmation` stores the block height, block ID and database confirmation time. There is no public setter accepting a success flag or caller-provided receipt. Concurrent matching results are idempotent; conflicting blocks never overwrite. Unconfirmed evidence returns `ErrSettlementUnconfirmed`. Any error, including a lost commit response, requires `Get` before claiming success; it never permits a new payment.
-- For an already successful record, `ConfirmSettlement` first restores and checks the original binding/trusted configuration, then returns the persisted result without node reads or timestamp changes. Use `CheckSettlement` explicitly for a fresh node audit. Re-saving identical bytes and delayed acceptance callbacks preserve success; `BeginBroadcast`/`Submit` never grant another permission. Bound SQL, recovery, RPC and commit with one caller context.
+The example does not:
 
-These guarantees apply only to cooperating instances sharing the same trusted database. Reservation does not lock on-chain nonce/funds. `SaveTransaction` itself still treats bytes as opaque: use the trusted builder to bind ID, signatures, authorization and expiry; never accept arbitrary client transaction bytes. `succeeded` persists a trusted-node verification result, not an independent chain proof; database write access remains a trust boundary. **A successful record does not bind a URL/business request or authorize repeated resource delivery.** HTTP authentication, associating business requests with quotes and fulfillment idempotency remain application responsibilities; neither exactly-once on-chain payment nor exactly-once delivery is guaranteed. Contract preflight, account-permission, fee-resource and risk gates remain necessary.
+- fund wallets or approve tokens;
+- retry automatically;
+- enforce a cumulative gas budget;
+- deduplicate business fulfillment.
 
-Signed payloads can be broadcast: use least-privilege database access, encryption and backups. `Transaction.Payload` is excluded from JSON but must never be logged manually. Runtime accounts should lack DELETE/TRUNCATE privileges; do not automatically purge expired reservations or delete history when rolling back code. CI's temporary localhost database uses trust authentication and is **not a deployment configuration**.
+Replaying a resource `GET` may run the handler again.
 
 ## Official facilitator mechanism
 
-Construct with `postgres.NewFacilitator(store, config)`, then register through `x402.Newx402Facilitator().Register([]x402.Network{x402.Network(mechanism.Network())}, mechanism)`. No custom TRON verification, transaction encoding or settlement state machine is needed. Construction does not connect, migrate, sign, broadcast or start HTTP/background services.
+Construct the mechanism with `postgres.NewFacilitator(store, config)` and register it with the official SDK:
 
-Supply trusted `FacilitatorConfig` values explicitly:
+```go
+x402.Newx402Facilitator().Register([]x402.Network{x402.Network(mechanism.Network())}, mechanism)
+```
 
-| Configuration | Meaning |
+You do not need custom TRON verification, transaction encoding or a settlement state machine. Construction does not connect to anything, migrate the database, sign, broadcast or start HTTP or background services.
+
+### Configuration
+
+Supply every trusted `FacilitatorConfig` value explicitly:
+
+| Field | Meaning |
 | --- | --- |
-| `Preflight` | Authorization domain, JSON-RPC endpoint and independently verified Permit2/proxy runtime-code hashes |
-| `Execution` | Same-network native-node root and pinned full genesis ID; wallet and walletsolidity APIs required |
-| `Policy` / `MaxAmount` | Fixed network, single asset/recipient and per-payment atomic-unit cap; no request overrides |
-| `ExecutorAddress` / `Signer` | Default-owner EOA gas payer and external digest signer; must honor context and never broadcast itself |
-| `FeeLimitSUN` / `Lifetime` | Positive per-transaction fee limit and whole-millisecond lifetime greater than 15 seconds, at most 10 minutes |
-| `Timeout` / `PollInterval` | Default 90-second total budget, at most 3 minutes; default 3-second confirmation polling, range 1–10 seconds |
+| `Preflight` | Authorization domain, JSON-RPC endpoint and independently verified runtime-code hashes for Permit2 and the proxy. |
+| `Execution` | Native-node root on the same network and the pinned full genesis ID. The `wallet` and `walletsolidity` APIs are required. |
+| `Policy`, `MaxAmount` | Fixed network, a single asset and recipient, and the per-payment cap in atomic units. Requests cannot override them. |
+| `ExecutorAddress`, `Signer` | A default-owner EOA that pays the gas, and an external digest signer. The signer must honor its context and must never broadcast by itself. |
+| `FeeLimitSUN` | Positive per-transaction fee limit. |
+| `Lifetime` | Transaction lifetime in whole milliseconds, greater than 15 seconds and at most 10 minutes. |
+| `Timeout` | Total settlement budget. Defaults to 90 seconds, at most 3 minutes. |
+| `PollInterval` | Confirmation polling interval. Defaults to 3 seconds, range 1 to 10 seconds. |
 
-- V2/exact/Permit2/upfront only, quote timeouts 6–600 seconds; new construction still requires at least 15 seconds remaining. Declares `supportedAssetTransferMethods: ["permit2"]` and the configured executor signer. All deployment/network settings must agree with Store. No dynamic multi-merchant routing, other schemes, extensions, multisig or contract wallets.
-- `Verify` is a read-only fresh-payment check: no journal reservation, signing or broadcasting and no promise of later success.
-- `Settle` does not depend on a preceding `Verify`. New payments pass signature/policy/time/on-chain checks, then reserve the journal. A row-locked transaction rechecks state, constructs, signs and commits the unique original transaction before broadcasting. Preflight, broadcast and finality waiting run outside that transaction; competing instances reconcile the winner rather than create another payment.
-- Existing unknown/pending/succeeded authorizations match trusted requirements, signatures and durable identity, then recover the original transaction. They do not rerun current-validity admission or query already-consumed nonces. `VerifyAuthorizationBinding` is historical identification only, never a replacement for fresh `VerifyAuthorization`/`Preflight.Check` admission.
-- Only successful `ConfirmSettlement` persistence permits the official `success=true` response with original txid/network/payer/amount. Missing solidified evidence is polled within the budget. Timeout, unknown broadcast or unavailable verification nodes return official `settlement_pending` with the original txid. Ambiguous persistence returns `settlement_recovery_required` and requires journal readback; neither outcome permits reservation release, re-signing saved transactions or another payment.
-- The official resource server retries pending with an original txid **once using identical bytes**, not indefinitely. The mechanism owns bounded waiting. The paired HTTP examples align remote/middleware/write timeouts; proxies and callers must match the budget too. After interruption, recover with the same payment payload rather than authorizing a new payment.
+### Scope
 
-External signing holds one database connection and a row lock: use short signing deadlines and size pools appropriately. A crash after signing but before save commit may cause a later signer invocation; uncommitted bytes were never broadcast by this library. **Exactly-once HSM invocation is not guaranteed.** Cooperating instances must share the journal and follow this workflow. Per-payment/fee caps are not aggregate sponsorship budgets. Public endpoints still require authentication, rate limits and expense budgets; independently verify deployments, token semantics, gas resources and account permissions.
+- Only x402 v2 with the `exact` scheme, Permit2 and the `upfront` flow is supported.
+- Quote timeouts must be 6 to 600 seconds. A new transaction still requires at least 15 seconds of remaining validity.
+- The mechanism declares `supportedAssetTransferMethods: ["permit2"]` and the configured executor as signer.
+- All deployment and network settings must match the store.
+- Dynamic multi-merchant routing, other schemes, extensions, multisig accounts and contract wallets are not supported.
+
+### Verify
+
+`Verify` is a read-only check of a fresh payment. It does not reserve the journal, sign or broadcast. A successful `Verify` does not promise that settlement will succeed.
+
+### Settle
+
+`Settle` does not depend on a preceding `Verify`.
+
+For a new payment:
+
+1. The signature, policy, time window and on-chain state are checked.
+2. The journal entry is reserved.
+3. Inside a row-locked database transaction, the state is checked again, and the unique original transaction is built, signed and committed.
+4. Only after that commit is the transaction broadcast.
+
+Preflight, broadcast and finality waiting run outside the database transaction. When instances compete, the losers reconcile with the winner's transaction instead of creating another payment.
+
+For an authorization that is already `broadcast_unknown`, `pending` or `succeeded`:
+
+- The request must match the trusted requirements, the signature and the durable identity. The original transaction is then recovered.
+- Current-validity admission is not rerun, and the already-consumed nonce is not queried.
+- `VerifyAuthorizationBinding` only identifies historical records. It never replaces fresh `VerifyAuthorization` and `Preflight.Check` admission.
+
+### Settlement results
+
+| Result | When |
+| --- | --- |
+| `success=true` with the original txid, network, payer and amount | Only after `ConfirmSettlement` has persisted success. |
+| `settlement_pending` with the original txid | The budget ran out, the broadcast outcome is unknown, or the verification nodes are unavailable. Missing solidified evidence is polled within the budget first. |
+| `settlement_recovery_required` | Persistence was ambiguous. Read the journal back before doing anything else. |
+
+Neither `settlement_pending` nor `settlement_recovery_required` permits releasing the reservation, re-signing the saved transaction or creating another payment.
+
+### Retries and timeouts
+
+- The official resource server retries a pending result with an original txid **once, using identical bytes**. It does not retry indefinitely.
+- The mechanism owns the bounded waiting.
+- The paired HTTP examples align the remote, middleware and write timeouts. Your proxies and callers must cover the same budget.
+- After an interruption, recover with the same payment payload. Never authorize a new payment.
+
+### Upfront flow
+
+- In the `upfront` flow, payment is settled before the handler runs. If the handler later fails, the payment is not refunded automatically. Do not settle again.
+- Your application needs fulfillment idempotency, lookup and compensation.
+- New `upfront` quotes require the updated client. Existing quotes and signatures without `paymentFlow` remain compatible.
+- The signed digest does not bind `paymentFlow`. The verifier and the official server compare the accepted terms with the trusted quote, so the field cannot be stripped to downgrade the flow.
+
+### External signing
+
+- During external signing, the mechanism holds one database connection and a row lock. Use short signing deadlines and size the pool accordingly.
+- If the process crashes after signing but before the save commits, a later attempt may invoke the signer again. This library never broadcasts uncommitted bytes.
+
+> [!WARNING]
+> **Exactly-once HSM invocation is not guaranteed.**
+
+## Durable settlement journal
+
+The journal is the PostgreSQL table behind the facilitator. It ensures that each authorization has at most one signed transaction and one broadcast, and that every recovery reuses that original transaction.
+
+### Set up
+
+- `exact/postgres.New` accepts a caller-managed `pgxpool.Pool` and a trusted `exact.Config`.
+- Apply [schema.sql](../exact/postgres/schema.sql) explicitly under a dedicated, trusted `search_path`. The same SQL is available as `SchemaSQL`.
+- Construction never runs DDL.
+- Other packages do not need a database. The journal does not depend on any payment gateway or merchant ledger.
+
+### Upgrade an existing journal
+
+> [!WARNING]
+> **Existing journals must be upgraded before the new version starts.** Reapplying `SchemaSQL` alone does not upgrade an existing table.
+
+1. Back up the database and stop all old writers.
+2. Run [upgrade_confirmation.sql](../exact/postgres/upgrade_confirmation.sql) explicitly in the same trusted `search_path`. The same SQL is available as `UpgradeConfirmationSQL`.
+3. Start the new version.
+
+The script runs in a transaction and adds the confirmation columns and constraints. It is repeatable and preserves historical transactions and states. If it fails, roll back any open transaction.
+
+Runtime accounts need no DDL privileges. Do not run old binaries that do not understand the success state alongside new ones. Do not roll back by dropping columns, clearing confirmations or downgrading states.
+
+### States
+
+```
+reserved ──SaveTransaction──▶ prepared ──BeginBroadcast──▶ broadcast_unknown ──RecordAccepted──▶ pending
+                                                                  │                                 │
+                                                                  └────────ConfirmSettlement────────┴──▶ succeeded
+```
+
+| State | Meaning |
+| --- | --- |
+| `reserved` | The authorization is reserved. No transaction is saved yet. |
+| `prepared` | The signed transaction and its ID are saved. Nothing has been broadcast. |
+| `broadcast_unknown` | Broadcast permission was granted. The transaction may or may not have reached a node. |
+| `pending` | A node accepted the transaction. This is not success. |
+| `succeeded` | The solidified transaction and the exact payment were verified by a trusted node and persisted. |
+
+Once a record reaches `broadcast_unknown`, `pending` or `succeeded`, the transaction is never sent again.
+
+### Store operations
+
+**`Reserve`** verifies the authorization offline, then reserves the combination of network, Permit2, payer and canonical nonce.
+
+- An identical authorization returns the original record.
+- A different digest for the same key conflicts.
+- Different proxies share the same Permit2 nonce namespace.
+
+**`SaveTransaction`** atomically persists a single transaction ID and signed payload.
+
+- Under concurrent writes, only one distinct result wins. Identical writes are idempotent.
+- Saved data cannot be replaced.
+- The same network and txid cannot be assigned to another authorization.
+
+**`BeginBroadcast`** commits `broadcast_unknown` **before** it returns the sole broadcast permission and the persisted transaction.
+
+- Never broadcast unsaved local data.
+- Never broadcast unless this call succeeded.
+
+**`RecordAccepted`** records node acceptance as `pending`. Acceptance alone never marks success.
+
+- If the record is already `succeeded`, a matching txid and digest keep the success state and confirmation timestamps.
+- After a timeout, process exit, missing transaction or ambiguous database commit, call `Get` and track the original txid. Never re-sign, replace or create a new payment.
+- A crash before the actual submission can also leave a record in `broadcast_unknown`. Automatic rebroadcast and reservation release are not implemented.
+
+**`Submit(ctx, id, prepared, executionClient, now)`** is the preferred way to broadcast. It loads the original bytes, validates them, moves the record to `broadcast_unknown` with a compare-and-swap, broadcasts only that durable snapshot and records acceptance.
+
+- Concurrent or repeated calls get only one permission.
+- A record in `broadcast_unknown`, `pending` or `succeeded` is never sent again.
+- If the node accepted the transaction but the acknowledgement could not be persisted, the record stays `broadcast_unknown` with the original txid.
+- If the SQL commit itself is ambiguous, call `Get`. Never assume the permission is still unused.
+
+**`Track(ctx, id, executionClient)`** performs read-only recovery using the txid in the journal.
+
+- It does not need the expired authorization or a `Prepare` object.
+- It never marks success or rebroadcasts based on a lookup.
+- Bound the whole database and network operation with the caller's context.
+- No background executor, polling or queue is started.
+
+**`store.CheckSettlement(ctx, id, executorAddress, executionClient, now)`** audits a record without changing it.
+
+- It recovers the prepared binding from the original record in `broadcast_unknown`, `pending` or `succeeded`.
+- It checks the trusted contracts, the executor and the original authorization identity, then verifies the solidified transaction and the exact payment.
+- No in-memory prepared object is needed, even after expiry.
+- It never changes state or timestamps and never broadcasts.
+- Invalid or mismatched legacy bytes fail before any node read.
+- If a later audit finds missing evidence or fails, durable success is not revoked automatically.
+
+**`store.ConfirmSettlement(ctx, id, executorAddress, executionClient, now)`** is the only way to record success.
+
+- It performs the same check as `CheckSettlement`, then atomically moves the record from `broadcast_unknown` or `pending` to `succeeded`. The compare-and-swap is keyed on the original authorization, txid and signed bytes.
+- `Record.Confirmation` stores the block height, block ID and database confirmation time.
+- There is no public setter that accepts a success flag or a caller-provided receipt.
+- Concurrent matching results are idempotent. A conflicting block never overwrites an existing confirmation.
+- Unconfirmed evidence returns `ErrSettlementUnconfirmed`.
+- After any error, including a lost commit response, call `Get` before claiming success. An error never permits a new payment.
+
+For a record that is already `succeeded`:
+
+- `ConfirmSettlement` restores and checks the original binding and trusted configuration, then returns the persisted result. It does not read from nodes or change timestamps. Use `CheckSettlement` explicitly for a fresh node audit.
+- Re-saving identical bytes and late acceptance callbacks keep the success state.
+- `BeginBroadcast` and `Submit` never grant another permission.
+
+Bound the SQL, recovery, RPC and commit steps with one caller context.
+
+### Guarantees and limits
+
+- These guarantees apply only to cooperating instances that share the same trusted database and follow this workflow.
+- A reservation does not lock the on-chain nonce or funds.
+- `SaveTransaction` treats the bytes as opaque. Use the trusted builder to bind the ID, signatures, authorization and expiry. Never accept arbitrary transaction bytes from clients.
+- `succeeded` stores a verification result from a trusted node. It is not an independent chain proof. Write access to the database remains a trust boundary.
+- Contract preflight, account-permission checks, fee-resource checks and risk gates are still required.
+
+> [!WARNING]
+> **A successful record is not bound to a URL or business request, and it does not authorize repeated delivery.** Neither exactly-once on-chain payment nor exactly-once delivery is guaranteed. HTTP authentication, linking business requests to quotes, and fulfillment idempotency are the application's responsibility.
+
+### Protect the journal
+
+- Signed payloads can be broadcast as they are. Use least-privilege database access, encryption and backups.
+- `Transaction.Payload` is excluded from JSON. Never log it manually.
+- Runtime accounts should not have `DELETE` or `TRUNCATE` privileges.
+- Do not purge expired reservations automatically, and do not delete history when rolling back code.
+- The temporary localhost database in CI uses trust authentication. It is **not a deployment configuration**.
+
+## Operator responsibilities
+
+- Per-payment caps and fee caps are not aggregate sponsorship budgets.
+- Public endpoints still need authentication, rate limits and spending budgets.
+- Verify deployments, token semantics, gas resources and account permissions independently.
