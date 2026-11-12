@@ -134,7 +134,7 @@ func paymentHTTPClient(contracts exact.Config, signer *exact.EOASigner, asset, p
 同日完成**反方向实付**：Go 付款端（`examples/payer`）→ Go 资源端 → 上游 `@bankofai/x402-tron@2.1.2` facilitator（经本地 HTTP 包装，fee_limit 11 TRX、进程内写入次数受限）。两笔 0.001 测试 USDT 结算 [e6f7d422…f2379bfe](https://nile.tronscan.org/#/transaction/e6f7d422c8e20796d487f3e21eb903e5301714b83599cc2259403abdf2379bfe)（块 `72617474`）与 [5a63e5e7…f079e1e1d](https://nile.tronscan.org/#/transaction/5a63e5e73e20a90787bcda3c0ea724d1a03ef3477d464a59db8627df079e1e1d)（块 `72617628`）均固化成功，双方余额精确变化。实测发现三处互操作差异：
 
 - 上游回执的 `payer` 为 `0x` 签名格式，且省略可选 `amount`；原付款端示例逐字比较导致误判未确认，已在 `64f8e75` 修正为与已配置付款人比对、`amount` 出现时才校验。
-- 上游 facilitator 无持久化日志，成功后不保留记录：重发同一授权会再次广播，链上因 nonce 已用而回滚（[4a491674…](https://nile.tronscan.org/#/transaction/4a491674e88d0015d53f0feae1f3d666ffd4a660d3ba851c7de6b93bc97dcc1d)，耗费 1.71 测试 TRX，未发生转账）。对接上游 facilitator 时，付款端不应对已拿到 txid 的请求自动重放。
+- 上游 facilitator 无持久化日志，成功后不保留记录：重发同一授权会再次广播，链上因 nonce 已用而回滚（[4a491674…](https://nile.tronscan.org/#/transaction/4a491674e88d0015d53f0feae1f3d666ffd4a660d3ba851c7de6b93bc97dcc1d)，耗费 1.71 测试 TRX，未发生转账）。对接上游 facilitator 时，付款端不应对已拿到 txid 的请求自动重放；已反馈上游 [BofAI/x402#122](https://github.com/BofAI/x402/issues/122)。
 - 上游在交易打包后即返回 `success=true`，此时固化节点尚无该交易；本项目 facilitator 只在固化并核验精确转账后返回成功。
 
 这完成了v0.1测试网候选范围的Nile实付、中断恢复和实际打包三端接入。它使用已有数据库/已核验合约和本机loopback服务，不是空白机器安装、独立服务器TLS运维或生产验收；公共RPC仍可能因链头变化拒绝新付款。Shasta/主网、长时稳定性及独立安全审计仍未验证。私钥、原始授权和本机运维材料不公开，不提供可照搬的生产资金配置。候选包可自行构建；已发布测试网候选版本 `v0.1.0-rc.3`（GitHub prerelease），尚无稳定版本。
