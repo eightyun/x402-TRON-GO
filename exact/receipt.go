@@ -13,13 +13,14 @@ import (
 )
 
 var (
-	ErrSettlementEvidence  = errors.New("原交易固化证据缺失、矛盾或与准备对象不符")
-	ErrSettlementExecution = errors.New("节点报告原交易执行未成功，不能确认付款")
-	ErrSettlementTransfer  = errors.New("原交易未包含唯一且精确的预期代币付款")
+	ErrSettlementEvidence  = errors.New("exact: solidified settlement evidence is missing, inconsistent or does not match the prepared settlement")
+	ErrSettlementExecution = errors.New("exact: node reports the settlement did not execute successfully")
+	ErrSettlementTransfer  = errors.New("exact: settlement does not contain exactly one matching token transfer")
 )
 
-// SettlementObservation 是可信原生节点的只读交叉核验结果，不是恶意节点的状态证明。
-// Confirmed 仅在原调用、固化归属、执行及标准代币事件全部匹配后为 true。
+// SettlementObservation is the result of read-only cross-verification against a trusted native
+// node. It is not a state proof against a malicious node. Confirmed is true only when the original
+// call, solidified block inclusion, execution and standard token event all match.
 type SettlementObservation struct {
 	Network       string
 	TransactionID string
@@ -28,9 +29,12 @@ type SettlementObservation struct {
 	BlockID       string
 }
 
-// CheckSettlement 仅从 walletsolidity 核验原交易，不广播、不改日志、不释放占用。
-// now 来自可信服务端；历史交易可过期，准备对象须保留或从可信绑定的原签名交易恢复，不能用当前报价重建。
-// 缺少固化主体或回执返回 Confirmed=false；错误和未确认结果都不允许重新付款或交付资源。
+// CheckSettlement verifies the original transaction using walletsolidity only. It does not
+// broadcast, modify the journal or release the reservation. now must come from a trusted server
+// clock. Historical transactions may have expired; the prepared settlement must be kept or restored
+// from the trusted, bound original signed transaction, and must not be rebuilt from a current
+// quote. A missing solidified body or receipt returns Confirmed=false. Neither an error nor an
+// unconfirmed result permits paying again or delivering the resource.
 func (client *ExecutionClient) CheckSettlement(ctx context.Context, prepared *PreparedSettlement, transaction SettlementTransaction, now time.Time) (SettlementObservation, error) {
 	if !client.valid() {
 		return SettlementObservation{}, ErrExecutionConfig

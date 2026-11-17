@@ -1,4 +1,5 @@
-// Package exact 提供 TRON exact Permit2 客户端、资源服务端及结算组件，节点和可信部署仍属信任边界。
+// Package exact provides TRON exact Permit2 client, resource server and settlement components.
+// Nodes and trusted deployments remain part of the trust boundary.
 package exact
 
 import (
@@ -18,34 +19,37 @@ import (
 )
 
 var (
-	ErrInvalidConfig        = errors.New("离线授权校验配置无效")
-	ErrInvalidRequirements  = errors.New("不支持或不一致的支付要求")
-	ErrInvalidAuthorization = errors.New("Permit2 授权字段无效")
-	ErrInvalidSignature     = errors.New("Permit2 授权签名无效")
-	ErrInvalidValidity      = errors.New("Permit2 授权不在允许的有效期内")
+	ErrInvalidConfig        = errors.New("exact: invalid offline verifier configuration")
+	ErrInvalidRequirements  = errors.New("exact: unsupported or inconsistent payment requirements")
+	ErrInvalidAuthorization = errors.New("exact: invalid Permit2 authorization fields")
+	ErrInvalidSignature     = errors.New("exact: invalid Permit2 authorization signature")
+	ErrInvalidValidity      = errors.New("exact: Permit2 authorization outside the allowed validity window")
 )
 
-// Config 显式配置可信网络及已由部署方核验的合约，不从客户端 extra 获取合约地址。
+// Config explicitly configures the trusted network and the contracts already verified by the
+// deployer. Contract addresses are never taken from the client-supplied extra.
 type Config struct {
 	Network        string `json:"network"`
 	Permit2Address string `json:"permit2Address"`
 	ProxyAddress   string `json:"proxyAddress"`
 }
 
-// TokenPermissions 是付款人授权转移的精确代币及最小单位金额。
+// TokenPermissions is the exact token and atomic-unit amount the payer authorizes for transfer.
 type TokenPermissions struct {
 	Token  string `json:"token"`
 	Amount string `json:"amount"`
 }
 
-// Witness 是 exact 代理使用的两字段签名见证，不包含 upto 的 facilitator 字段。
+// Witness is the two-field signed witness used by the exact proxy. It does not include the
+// facilitator field used by upto.
 type Witness struct {
 	To         string `json:"to"`
 	ValidAfter string `json:"validAfter"`
 }
 
-// Permit2Authorization 与 TRON 生态 exact Permit2 的 wire 字段一致。
-// 金额/时间是十进制 uint256，nonce 也可采用客户端生成的 32 字节 0x 编码。
+// Permit2Authorization matches the wire fields of exact Permit2 in the TRON ecosystem.
+// Amounts and times are decimal uint256 values; the nonce may also be a client-generated
+// 32-byte 0x-encoded value.
 type Permit2Authorization struct {
 	From      string           `json:"from"`
 	Permitted TokenPermissions `json:"permitted"`
@@ -55,13 +59,14 @@ type Permit2Authorization struct {
 	Witness   Witness          `json:"witness"`
 }
 
-// Permit2Payload 是 x402 payload 中的 TRON exact Permit2 部分，不是完整协议信封。
+// Permit2Payload is the TRON exact Permit2 part of an x402 payload, not the full protocol envelope.
 type Permit2Payload struct {
 	Signature     string               `json:"signature"`
 	Authorization Permit2Authorization `json:"permit2Authorization"`
 }
 
-// VerifiedAuthorization 仅是一次离线校验结果，绝不能用作结算证明或资源交付凭据。
+// VerifiedAuthorization is only the result of a single offline verification. It must never be
+// used as proof of settlement or as a credential for delivering resources.
 type VerifiedAuthorization struct {
 	Network string
 	Payer   string
@@ -69,15 +74,17 @@ type VerifiedAuthorization struct {
 	Digest  [32]byte
 }
 
-// OfflineVerifier 是单网络的不可变离线校验器，可以并发使用。
-// 不查询余额、allowance、nonce 位图或合约代码，不提供防重放或结算保证。
+// OfflineVerifier is an immutable offline verifier for a single network and is safe for
+// concurrent use. It does not query balances, allowances, nonce bitmaps or contract code, and
+// provides no replay protection or settlement guarantee.
 type OfflineVerifier struct {
 	network string
 	proxy   [20]byte
 	domain  [32]byte
 }
 
-// NewOfflineVerifier 校验配置并固定签名域；不验证配置合约是否实际部署。
+// NewOfflineVerifier validates the configuration and fixes the signing domain. It does not
+// verify that the configured contracts are actually deployed.
 func NewOfflineVerifier(config Config) (*OfflineVerifier, error) {
 	network, networkErr := tron.NormalizeNetwork(config.Network)
 	chainID, chainErr := tron.ChainID(config.Network)
@@ -95,8 +102,9 @@ func NewOfflineVerifier(config Config) (*OfflineVerifier, error) {
 	return &OfflineVerifier{network: network, proxy: proxy, domain: domain}, nil
 }
 
-// Digest 计算 exact Permit2 TIP-712 摘要，适用于外部签名器。
-// 仅检查可编码字段，不验证付款要求、有效期、签名或 nonce 是否已使用。
+// Digest computes the exact Permit2 TIP-712 digest for use with external signers.
+// It only checks that the fields are encodable; it does not verify payment requirements, the
+// validity window, the signature, or whether the nonce has been used.
 func (verifier *OfflineVerifier) Digest(authorization Permit2Authorization) ([32]byte, error) {
 	if verifier == nil || verifier.network == "" {
 		return [32]byte{}, ErrInvalidConfig
@@ -108,9 +116,11 @@ func (verifier *OfflineVerifier) Digest(authorization Permit2Authorization) ([32
 	return verifier.digest(parsed), nil
 }
 
-// VerifyAuthorization 对照服务端可信报价校验 EOA 授权，now 应由服务端时钟提供。
-// 调用方仍必须进行链上状态、持久化幂等、nonce 和最终结算验证后才能交付资源。
-// 仅支持 permit2 及可选的 paymentFlow=upfront，不支持其他 extra 或 extensions。
+// VerifyAuthorization verifies an EOA authorization against the server's trusted quote; now
+// should come from the server clock. Callers must still verify on-chain state, persistent
+// idempotency, the nonce and final settlement before delivering resources.
+// Only permit2 with an optional paymentFlow=upfront is supported; any other extra or extensions
+// are rejected.
 func (verifier *OfflineVerifier) VerifyAuthorization(payload types.PaymentPayload, requirements types.PaymentRequirements, now time.Time) (VerifiedAuthorization, error) {
 	raw, authorization, err := verifier.boundAuthorization(payload, requirements)
 	if err != nil {
@@ -125,9 +135,11 @@ func (verifier *OfflineVerifier) VerifyAuthorization(payload types.PaymentPayloa
 	return verifier.verifyBoundSignature(raw, authorization)
 }
 
-// VerifyAuthorizationBinding 只识别已签名授权与可信报价的历史绑定，不检查当前有效期。
-// 仅可对照已存在的持久化记录做恢复；不能用于新付款准入、签名、广播或资源交付。
-// 新请求必须另行使用 VerifyAuthorization/Preflight.Check 和当前服务端时间。
+// VerifyAuthorizationBinding only checks the historical binding between a signed authorization
+// and a trusted quote; it does not check the current validity window. It may only be used for
+// recovery against existing persisted records, never for admitting new payments, signing,
+// broadcasting or delivering resources. New requests must use VerifyAuthorization or
+// Preflight.Check with the current server time instead.
 func (verifier *OfflineVerifier) VerifyAuthorizationBinding(payload types.PaymentPayload, requirements types.PaymentRequirements) (VerifiedAuthorization, error) {
 	raw, authorization, err := verifier.boundAuthorization(payload, requirements)
 	if err != nil {

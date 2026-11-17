@@ -14,18 +14,21 @@ import (
 )
 
 var (
-	ErrClientConfig = errors.New("TRON 客户端配置无效")
-	ErrClientPolicy = errors.New("支付报价超出客户端授权策略")
-	ErrClientSign   = errors.New("付款授权签名失败")
+	ErrClientConfig = errors.New("exact: invalid client configuration")
+	ErrClientPolicy = errors.New("exact: payment quote violates the client payment policy")
+	ErrClientSign   = errors.New("exact: failed to sign payment authorization")
 )
 
-// AuthorizationSigner 只签署已计算的 TIP-712 摘要，不得再次哈希或添加 personal_sign 前缀。
-// 返回低 s 的 65 字节 r||s||v；须遵守 context、支持并发且不得记录密钥或授权签名。
-// 它与结算交易的 SHA-256 DigestSigner 属于不同签名边界。
+// AuthorizationSigner signs only an already computed TIP-712 digest; it must not hash it again
+// or add a personal_sign prefix. It returns a 65-byte low-s r||s||v signature, must honor the
+// context, must be safe for concurrent use, and must not log keys or authorization signatures.
+// It belongs to a different signing boundary from the SHA-256 DigestSigner used for settlement
+// transactions.
 type AuthorizationSigner func(context.Context, [32]byte) ([]byte, error)
 
-// ClientConfig 固定可信合约及付款策略；金额均为代币最小单位，不是美元价格。
-// Lifetime 为整秒，默认 60 秒，范围 6 秒至 10 分钟，实际期限不超过报价 timeout。
+// ClientConfig fixes the trusted contracts and the payment policy. All amounts are in atomic
+// token units, not USD prices. Lifetime must be a whole number of seconds, defaults to 60 seconds
+// and ranges from 6 seconds to 10 minutes; the effective deadline never exceeds the quote timeout.
 type ClientConfig struct {
 	Authorization Config
 	PayerAddress  string
@@ -36,8 +39,10 @@ type ClientConfig struct {
 	Signer        AuthorizationSigner `json:"-"`
 }
 
-// Client 实现官方 x402 v2 客户端机制，不访问节点、数据库或自动批准代币授权。
-// 每次调用创建独立可扣款授权，不提供累计预算、业务重试幂等或到账证明。
+// Client implements the official x402 v2 client scheme. It does not access nodes or databases
+// and does not automatically approve token allowances. Each call creates an independent,
+// chargeable authorization; it provides no aggregate budget, idempotency for business retries,
+// or proof of payment.
 type Client struct {
 	verifier *OfflineVerifier
 	payer    [20]byte
@@ -50,7 +55,8 @@ type Client struct {
 
 var _ x402.SchemeNetworkClient = (*Client)(nil)
 
-// NewClient 验证并复制付款策略，外部报价不能替换签名域、合约或付款上限。
+// NewClient validates and copies the payment policy. External quotes cannot replace the signing
+// domain, the contracts or the payment cap.
 func NewClient(config ClientConfig) (*Client, error) {
 	verifier, verifyErr := NewOfflineVerifier(config.Authorization)
 	payer, payerErr := configuredAddress(config.PayerAddress)
@@ -69,10 +75,10 @@ func NewClient(config ClientConfig) (*Client, error) {
 	}, nil
 }
 
-// Scheme 返回官方 SDK 用于机制注册的名称。
+// Scheme returns the name the official SDK uses to register the scheme.
 func (*Client) Scheme() string { return "exact" }
 
-// Network 返回注册用的规范网络标识。
+// Network returns the canonical network identifier used for registration.
 func (client *Client) Network() string {
 	if client == nil || client.verifier == nil {
 		return ""
@@ -80,8 +86,10 @@ func (client *Client) Network() string {
 	return client.verifier.network
 }
 
-// CreatePaymentPayload 封装 nonce、授权、TIP-712 摘要和签名核验，由官方 SDK 负责 HTTP 重试。
-// 调用者应提供有界 context；签名完成后重新检查时效，错误不回显签名器原文。
+// CreatePaymentPayload builds the nonce, authorization and TIP-712 digest and verifies the
+// signature; HTTP retries are handled by the official SDK. Callers should pass a bounded context.
+// The validity window is rechecked after signing, and errors never echo the signer's original
+// message.
 func (client *Client) CreatePaymentPayload(ctx context.Context, requirements types.PaymentRequirements, payloadCtx x402.PaymentPayloadContext) (types.PaymentPayload, error) {
 	if client == nil || client.verifier == nil || client.signer == nil {
 		return types.PaymentPayload{}, ErrClientConfig

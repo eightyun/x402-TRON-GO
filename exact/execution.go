@@ -18,16 +18,18 @@ import (
 )
 
 var (
-	ErrExecutionConfig   = errors.New("原生结算节点配置无效")
-	ErrExecutionInput    = errors.New("原交易查询参数无效")
-	ErrExecutionNode     = errors.New("原生节点访问失败或响应无效")
-	ErrBroadcastUnknown  = errors.New("原交易广播结果未知，必须保留并追踪原交易")
-	ErrBroadcastRejected = errors.New("节点拒绝了本次广播请求，不代表原交易最终失败")
+	ErrExecutionConfig   = errors.New("exact: invalid execution node configuration")
+	ErrExecutionInput    = errors.New("exact: invalid transaction lookup input")
+	ErrExecutionNode     = errors.New("exact: native node request failed or returned an invalid response")
+	ErrBroadcastUnknown  = errors.New("exact: broadcast outcome unknown; keep and track the original transaction")
+	ErrBroadcastRejected = errors.New("exact: node rejected this broadcast attempt; the original transaction has not necessarily failed")
 )
 
-// ExecutionConfig 固定一个原生节点根 URL 与独立核验的完整创世区块 ID。
-// 广播/查找使用 wallet，固化核验另要求同一配置端点提供 walletsolidity。
-// 不自动学习 GenesisBlockID，不从付款请求获取配置；自定义 Transport 不得重试写请求。
+// ExecutionConfig pins a single native node root URL and an independently verified full genesis
+// block ID. Broadcast and lookup use the wallet API; solidified verification additionally
+// requires the same configured endpoint to serve walletsolidity. GenesisBlockID is never learned
+// automatically and the configuration is never taken from a payment request. A custom Transport
+// must not retry write requests.
 type ExecutionConfig struct {
 	Network                string
 	NodeURL                string
@@ -38,8 +40,10 @@ type ExecutionConfig struct {
 	AllowInsecureLocalHTTP bool
 }
 
-// ExecutionClient 提供单次原交易广播、只读查找和固化付款核验，不构建、签名或自动重试。
-// 跨进程幂等由持久化日志提供，不能绕过日志直接把 Broadcast 当完整结算。
+// ExecutionClient provides single broadcasts of the original transaction, read-only lookups and
+// solidified payment verification. It does not build, sign or automatically retry. Cross-process
+// idempotency is provided by the persistent journal; Broadcast must not be used as a complete
+// settlement by bypassing the journal.
 type ExecutionClient struct {
 	network   string
 	genesis   [32]byte
@@ -47,15 +51,17 @@ type ExecutionClient struct {
 	timeout   time.Duration
 }
 
-// TransactionObservation 仅表示节点当前是否返回原交易主体，不代表执行成功或固化。
+// TransactionObservation only reports whether the node currently returns the original transaction
+// body. It does not indicate execution success or solidification.
 type TransactionObservation struct {
 	Network       string
 	TransactionID string
 	Found         bool
 }
 
-// NewExecutionClient 复用现有 HTTP 安全配置，构造时不访问节点。
-// GenesisBlockID 为无 0x 的 32 字节 hex，必须由部署方独立核验。
+// NewExecutionClient reuses the existing HTTP security configuration and does not contact the node
+// during construction. GenesisBlockID is a 32-byte hex string without a 0x prefix and must be
+// independently verified by the deployer.
 func NewExecutionClient(config ExecutionConfig) (*ExecutionClient, error) {
 	network, err := tron.NormalizeNetwork(config.Network)
 	chainID, chainErr := tron.ChainID(config.Network)
@@ -88,7 +94,7 @@ func NewExecutionClient(config ExecutionConfig) (*ExecutionClient, error) {
 	return &ExecutionClient{network: network, genesis: genesis, transport: transport, timeout: config.Timeout}, nil
 }
 
-// Network 返回固定网络；零值客户端返回空字符串。
+// Network returns the pinned network. A nil or zero-value client returns an empty string.
 func (client *ExecutionClient) Network() string {
 	if client == nil {
 		return ""
@@ -96,9 +102,11 @@ func (client *ExecutionClient) Network() string {
 	return client.network
 }
 
-// Broadcast 只发送一次已准备且已持久化的原始字节；调用前必须取得日志广播许可。
-// nil 仅表示节点明确受理且前后网络核对通过，绝不能作为付款成功凭据。
-// 错误、拒绝、超时或提交后中断均不得释放占用、重签或另行构建付款。
+// Broadcast sends the prepared and already persisted raw bytes exactly once. The caller must obtain
+// broadcast permission from the journal before calling it. A nil error only means the node
+// explicitly accepted the transaction and the network checks before and after passed; it must
+// never be treated as proof of payment success. On an error, rejection, timeout or interruption
+// after submission, the caller must not release the reservation, re-sign or build another payment.
 func (client *ExecutionClient) Broadcast(ctx context.Context, prepared *PreparedSettlement, transaction SettlementTransaction, now time.Time) error {
 	if !client.valid() {
 		return ErrExecutionConfig
@@ -151,8 +159,10 @@ func (client *ExecutionClient) Broadcast(ctx context.Context, prepared *Prepared
 	return nil
 }
 
-// Lookup 只查询 FullNode 的原交易主体，不读取执行回执或提供固化成功判断。
-// 空对象表示本次未找到，不能据此判失败、释放占用或重签；错误仍保留原 txid。
+// Lookup only queries the FullNode for the original transaction body. It does not read the
+// execution receipt or determine solidified success. An empty object means the transaction was not
+// found this time; it must not be used to conclude failure, release the reservation or re-sign.
+// Errors still keep the original txid.
 func (client *ExecutionClient) Lookup(ctx context.Context, transactionID string) (TransactionObservation, error) {
 	if !client.valid() {
 		return TransactionObservation{}, ErrExecutionConfig

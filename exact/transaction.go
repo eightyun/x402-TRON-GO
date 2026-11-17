@@ -16,18 +16,19 @@ import (
 )
 
 var (
-	ErrSettlementConfig    = errors.New("结算交易构建配置无效")
-	ErrReferenceBlock      = errors.New("结算参考区块无效或已过期")
-	ErrSettlementValidity  = errors.New("结算交易剩余有效期不足")
-	ErrSettlementSigner    = errors.New("外部结算签名器失败")
-	ErrSettlementSignature = errors.New("结算交易签名无效或与费用付款方不符")
-	ErrSettlementBytes     = errors.New("结算交易字节或 ID 与已准备交易不符")
+	ErrSettlementConfig    = errors.New("exact: invalid settlement builder configuration")
+	ErrReferenceBlock      = errors.New("exact: settlement reference block invalid or stale")
+	ErrSettlementValidity  = errors.New("exact: insufficient settlement validity remaining")
+	ErrSettlementSigner    = errors.New("exact: external settlement signer failed")
+	ErrSettlementSignature = errors.New("exact: settlement signature invalid or not from the fee payer")
+	ErrSettlementBytes     = errors.New("exact: settlement bytes or ID do not match the prepared transaction")
 )
 
 const minSettlementRemaining = 15 * time.Second
 
-// SettlementBuilderConfig 显式约束费用付款方、单笔费用上限和交易生命周期。
-// Lifetime 必须大于 15 秒、不超过 10 分钟且为整毫秒；FeeLimitSUN 必须为正。
+// SettlementBuilderConfig explicitly constrains the fee payer, the per-transaction fee limit and
+// the transaction lifetime. Lifetime must be greater than 15 seconds, at most 10 minutes and a
+// whole number of milliseconds. FeeLimitSUN must be positive.
 type SettlementBuilderConfig struct {
 	Authorization   Config
 	ExecutorAddress string
@@ -35,8 +36,9 @@ type SettlementBuilderConfig struct {
 	Lifetime        time.Duration
 }
 
-// ReferenceBlock 必须来自部署方可信节点，不可从付款请求获取。
-// 离线检查不证明该区块的真实归属、固化性或节点诚实性。
+// ReferenceBlock must come from the deployer's trusted node and must not be taken from a payment
+// request. Offline checks do not prove the block's actual chain membership, solidification or the
+// node's honesty.
 type ReferenceBlock struct {
 	Network   string
 	Number    uint64
@@ -44,19 +46,20 @@ type ReferenceBlock struct {
 	Timestamp time.Time
 }
 
-// DigestSigner 是调用方管理的外部密钥边界，仅签署固定的 SHA-256 摘要。
-// 返回低 s 的 r||s||v，v 可为 0/1 或 27/28，输出统一规范化为 0/1。
-// 必须遵守 context，不能记录或返回私钥。
+// DigestSigner is a caller-managed external key boundary that only signs the fixed SHA-256
+// digest. It returns a low-s r||s||v signature where v may be 0/1 or 27/28; the output is
+// normalized to 0/1. It must honor the context and must never log or return the private key.
 type DigestSigner func(context.Context, [32]byte) ([]byte, error)
 
-// SettlementTransaction 是完整的 TRON Transaction Protobuf，不是 JSON。
-// Payload 可用于后续 broadcasthex，属于可广播敏感数据，不得打印或公开返回。
+// SettlementTransaction is a complete TRON Transaction protobuf, not JSON. Payload can be used for
+// a later broadcasthex call; it is sensitive broadcastable data and must never be printed or
+// returned publicly.
 type SettlementTransaction struct {
 	ID      string
 	Payload []byte `json:"-"`
 }
 
-// SettlementBuilder 不持有密钥或 RPC，可以并发使用。
+// SettlementBuilder holds no keys or RPC clients and is safe for concurrent use.
 type SettlementBuilder struct {
 	offline  *OfflineVerifier
 	executor [20]byte
@@ -64,7 +67,8 @@ type SettlementBuilder struct {
 	lifetime time.Duration
 }
 
-// PreparedSettlement 是不可变的单笔 exact 调用，不能替换其 raw_data 后再签名。
+// PreparedSettlement is an immutable single exact call. Its raw_data cannot be replaced before
+// signing.
 type PreparedSettlement struct {
 	raw           []byte
 	prefix        []byte
@@ -77,7 +81,8 @@ type PreparedSettlement struct {
 	expiresAt     time.Time
 }
 
-// NewSettlementBuilder 只创建固定子集构建器，不核验链上部署或账户权限。
+// NewSettlementBuilder only creates a builder for the fixed transaction subset. It does not verify
+// on-chain deployments or account permissions.
 func NewSettlementBuilder(config SettlementBuilderConfig) (*SettlementBuilder, error) {
 	offline, err := NewOfflineVerifier(config.Authorization)
 	executor, addressErr := configuredAddress(config.ExecutorAddress)
@@ -87,9 +92,10 @@ func NewSettlementBuilder(config SettlementBuilderConfig) (*SettlementBuilder, e
 	return &SettlementBuilder{offline: offline, executor: executor, fee: config.FeeLimitSUN, lifetime: config.Lifetime}, nil
 }
 
-// Build 离线校验授权并本地构建交易，不信任节点提供的任意交易 JSON/raw_data_hex。
-// now 必须来自服务端时钟；仍需单独进行链上预检、持久化和最终结果核验。
-// 调用期间不能修改 payload/requirements。
+// Build verifies the authorization offline and builds the transaction locally; it never trusts
+// arbitrary transaction JSON or raw_data_hex provided by a node. now must come from the server
+// clock. On-chain preflight, persistence and final result verification are still required
+// separately. payload and requirements must not be modified during the call.
 func (builder *SettlementBuilder) Build(payload types.PaymentPayload, requirements types.PaymentRequirements, reference ReferenceBlock, now time.Time) (*PreparedSettlement, error) {
 	if builder == nil || builder.offline == nil {
 		return nil, ErrSettlementConfig
@@ -138,7 +144,7 @@ func (builder *SettlementBuilder) Build(payload types.PaymentPayload, requiremen
 	}, nil
 }
 
-// ID 返回 SHA-256(raw_data) 的规范十六进制交易 ID。
+// ID returns the canonical hex transaction ID, SHA-256(raw_data).
 func (prepared *PreparedSettlement) ID() string {
 	if prepared == nil || len(prepared.raw) == 0 {
 		return ""
@@ -146,7 +152,8 @@ func (prepared *PreparedSettlement) ID() string {
 	return hex.EncodeToString(prepared.digest[:])
 }
 
-// SigningDigest 返回原始 Protobuf 的 SHA-256 摘要，不是 TIP-712 授权摘要。
+// SigningDigest returns the SHA-256 digest of the raw protobuf. It is not the TIP-712
+// authorization digest.
 func (prepared *PreparedSettlement) SigningDigest() [32]byte {
 	if prepared == nil {
 		return [32]byte{}
@@ -154,8 +161,9 @@ func (prepared *PreparedSettlement) SigningDigest() [32]byte {
 	return prepared.digest
 }
 
-// RawData 返回副本，供外部签名审批核对，修改副本不会影响准备对象。
-// 内容包含付款授权签名，仍属敏感数据，不得打印或公开返回。
+// RawData returns a copy for review by external signing approval; modifying the copy does not
+// affect the prepared settlement. The content includes the payment authorization signature, is
+// still sensitive data and must never be printed or returned publicly.
 func (prepared *PreparedSettlement) RawData() []byte {
 	if prepared == nil {
 		return nil
@@ -163,7 +171,8 @@ func (prepared *PreparedSettlement) RawData() []byte {
 	return append([]byte(nil), prepared.raw...)
 }
 
-// Authorization 返回与该交易绑定的离线授权标识，仍不是付款证明。
+// Authorization returns the offline authorization identifiers bound to this transaction. It is
+// still not proof of payment.
 func (prepared *PreparedSettlement) Authorization() VerifiedAuthorization {
 	if prepared == nil {
 		return VerifiedAuthorization{}
@@ -171,7 +180,8 @@ func (prepared *PreparedSettlement) Authorization() VerifiedAuthorization {
 	return prepared.authorization
 }
 
-// ExpiresAt 返回本次已固定的交易过期时间；不得因重试延长或重新构建付款。
+// ExpiresAt returns the transaction expiration time pinned for this settlement. It must not be
+// extended, nor the payment rebuilt, because of retries.
 func (prepared *PreparedSettlement) ExpiresAt() time.Time {
 	if prepared == nil {
 		return time.Time{}
@@ -179,7 +189,8 @@ func (prepared *PreparedSettlement) ExpiresAt() time.Time {
 	return prepared.expiresAt
 }
 
-// FeeLimitSUN 返回原签名内容固定的费用上限，供恢复后的当前广播策略核对。
+// FeeLimitSUN returns the fee limit fixed in the originally signed content, so that a restored
+// settlement can be checked against the current broadcast policy.
 func (prepared *PreparedSettlement) FeeLimitSUN() int64 {
 	if prepared == nil {
 		return 0
@@ -187,8 +198,10 @@ func (prepared *PreparedSettlement) FeeLimitSUN() int64 {
 	return prepared.fee
 }
 
-// Sign 调用外部签名器并恢复公钥核对费用付款方，签名前后均检查剩余有效期。
-// now 必须来自服务端，签名耗时计入复查。该函数不保存/广播，成功不代表付款成功。
+// Sign calls the external signer and recovers the public key to verify the fee payer, checking the
+// remaining validity both before and after signing. now must come from the server; the time spent
+// signing is included in the recheck. Sign does not persist or broadcast, and success does not mean
+// the payment succeeded.
 func (prepared *PreparedSettlement) Sign(ctx context.Context, signer DigestSigner, now time.Time) (SettlementTransaction, error) {
 	if prepared == nil || len(prepared.raw) == 0 || signer == nil {
 		return SettlementTransaction{}, ErrSettlementConfig
@@ -233,9 +246,11 @@ func (prepared *PreparedSettlement) Sign(ctx context.Context, signer DigestSigne
 	return transaction, nil
 }
 
-// ValidateSigned 核对本准备对象的完整规范字节和费用付款方签名，不检查当前有效期。
-// 可用于保存前或历史审计；拒绝不同 raw、未知/重复字段、额外签名与非规范编码。
-// 不验证链上权限、余额、实际执行或固化；恢复过程不能将其当作交付凭据。
+// ValidateSigned checks the complete canonical bytes of this prepared settlement and the fee payer
+// signature; it does not check the current validity window. It can be used before persisting or
+// for historical audits, and rejects a different raw, unknown or duplicate fields, extra signatures
+// and non-canonical encodings. It does not verify on-chain permissions, balances, actual execution
+// or solidification; recovery must not treat it as proof for delivery.
 func (prepared *PreparedSettlement) ValidateSigned(transaction SettlementTransaction) error {
 	if prepared == nil || len(prepared.raw) == 0 {
 		return ErrSettlementConfig
@@ -250,8 +265,9 @@ func (prepared *PreparedSettlement) ValidateSigned(transaction SettlementTransac
 	return nil
 }
 
-// ValidateBroadcast 校验已准备交易及当前剩余有效期，不提供广播许可或链上预检。
-// 持久化串联与底层客户端共同使用；now 必须来自服务端可信时钟。
+// ValidateBroadcast validates the prepared transaction and its current remaining validity. It does
+// not grant broadcast permission or perform on-chain preflight. It is shared by the persistence
+// orchestration and the underlying client; now must come from a trusted server clock.
 func (prepared *PreparedSettlement) ValidateBroadcast(transaction SettlementTransaction, now time.Time) error {
 	if err := prepared.ValidateSigned(transaction); err != nil {
 		return err

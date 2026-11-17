@@ -1,4 +1,5 @@
-// Package postgres 提供可选结算幂等日志、受控提交及可信节点核验结果持久化，不持有密钥。
+// Package postgres provides an optional idempotent settlement journal, controlled submission and
+// persistence of trusted-node verification results. It holds no keys.
 package postgres
 
 import (
@@ -18,29 +19,33 @@ import (
 	"github.com/x402-foundation/x402/go/v2/types"
 )
 
-// SchemaSQL 需由部署方显式执行，构造 Store 不修改数据库结构。
-// 不得删除曾用于广播的日志；运行账号不应拥有 DELETE/TRUNCATE 权限。
+// SchemaSQL must be applied explicitly by the deployer; constructing a Store does not modify the
+// database schema. Journal records that were ever used for a broadcast must never be deleted;
+// the runtime account should not hold DELETE or TRUNCATE privileges.
 //
 //go:embed schema.sql
 var SchemaSQL string
 
-// UpgradeConfirmationSQL 在已有日志表上显式启用成功终态，先备份并停止旧版本写入。
-// 脚本可重复执行，不删除历史；事务失败后调用方应回滚连接上的未完成事务。
+// UpgradeConfirmationSQL explicitly enables the succeeded terminal state on an existing journal
+// table. Back up first and stop writes from older versions. The script is re-runnable and does
+// not delete history; if its transaction fails, the caller should roll back the unfinished
+// transaction on that connection.
 //
 //go:embed upgrade_confirmation.sql
 var UpgradeConfirmationSQL string
 
 var (
-	ErrInvalidStore     = errors.New("结算日志配置无效")
-	ErrInvalidInput     = errors.New("结算日志参数无效")
-	ErrStore            = errors.New("结算日志数据库操作失败")
-	ErrNotFound         = errors.New("结算日志不存在")
-	ErrConflict         = errors.New("授权 nonce 或交易内容已被其他结算占用")
-	ErrNotPrepared      = errors.New("结算尚未保存签名交易")
-	ErrBroadcastStarted = errors.New("原交易已进入广播或待确认阶段，只允许追踪原交易")
+	ErrInvalidStore     = errors.New("postgres: invalid settlement journal configuration")
+	ErrInvalidInput     = errors.New("postgres: invalid settlement journal input")
+	ErrStore            = errors.New("postgres: settlement journal database operation failed")
+	ErrNotFound         = errors.New("postgres: settlement journal record not found")
+	ErrConflict         = errors.New("postgres: authorization nonce or transaction already used by another settlement")
+	ErrNotPrepared      = errors.New("postgres: settlement has no saved signed transaction")
+	ErrBroadcastStarted = errors.New("postgres: settlement already broadcast or pending; only tracking the original transaction is allowed")
 )
 
-// State 表示本地执行进度及已持久化的可信节点核验结果，不是独立链上证明。
+// State represents local execution progress and persisted trusted-node verification results.
+// It is not independent on-chain proof.
 type State string
 
 const (
@@ -51,22 +56,26 @@ const (
 	StateSucceeded        State = "succeeded"
 )
 
-// Confirmation 是原交易通过固化及精确付款核验后的审计定位，不是恶意节点状态证明。
+// Confirmation is the audit locator recorded after the original transaction passed solidification
+// and exact-payment verification. It is not proof of state against a malicious node.
 type Confirmation struct {
 	BlockNumber uint64
 	BlockID     string
 	ConfirmedAt time.Time
 }
 
-// Transaction 保存可信交易构建器提供的交易 ID 与不透明签名字节。
-// 日志只约束不可替换，不验证交易签名、内容与授权的绑定或链上有效性。
-// Payload 是可广播的敏感数据，不能记录到日志或从商户 API 返回。
+// Transaction holds the transaction ID and opaque signed bytes supplied by a trusted transaction
+// builder. The journal only enforces that they cannot be replaced; it does not verify the
+// signature, the binding between content and authorization, or on-chain validity.
+// Payload is broadcastable sensitive data and must never be logged or returned from merchant
+// APIs.
 type Transaction struct {
 	ID      string
 	Payload []byte `json:"-"`
 }
 
-// Record 可用于进程重启后恢复原交易，不是资源交付凭据。
+// Record can be used to recover the original transaction after a process restart. It is not a
+// credential for delivering the resource.
 type Record struct {
 	ID             string
 	Permit2Address string
@@ -78,8 +87,9 @@ type Record struct {
 	Confirmation   *Confirmation `json:",omitempty"`
 }
 
-// Store 可以并发使用；所有实例必须共享同一日志，禁止绕开日志另行广播。
-// db 的生命周期及可信 search_path、TLS、权限、备份由部署方管理。
+// Store is safe for concurrent use. All instances must share the same journal, and broadcasting
+// outside the journal is forbidden. The deployer manages the db lifecycle as well as a trusted
+// search_path, TLS, privileges and backups.
 type Store struct {
 	db       *pgxpool.Pool
 	verifier *exact.OfflineVerifier
@@ -88,7 +98,8 @@ type Store struct {
 	config   exact.Config
 }
 
-// New 固定一个可信网络及 Permit2 域，不连接节点、不自动执行 DDL。
+// New pins one trusted network and Permit2 domain. It does not contact nodes or run DDL
+// automatically.
 func New(db *pgxpool.Pool, config exact.Config) (*Store, error) {
 	verifier, err := exact.NewOfflineVerifier(config)
 	if db == nil || err != nil {
@@ -105,9 +116,10 @@ func New(db *pgxpool.Pool, config exact.Config) (*Store, error) {
 	return &Store{db: db, verifier: verifier, network: network, permit2: permit2, config: config}, nil
 }
 
-// Reserve 先离线校验，再持久化占用 Permit2 的付款人 nonce。
-// 同一 nonce 的不同摘要会冲突；相同授权的重复请求返回原记录。
-// 不预留链上余额，不替代预检；now 必须来自服务端可信时钟。
+// Reserve verifies the authorization offline and then durably reserves the payer's Permit2 nonce.
+// A different digest for the same nonce conflicts; a repeated request with the same
+// authorization returns the original record. It does not reserve on-chain balance and does not
+// replace preflight checks; now must come from a trusted server clock.
 func (store *Store) Reserve(ctx context.Context, payload types.PaymentPayload, requirements types.PaymentRequirements, now time.Time) (Record, error) {
 	if !store.valid() {
 		return Record{}, ErrInvalidStore
@@ -146,7 +158,8 @@ func (store *Store) authorizationID(verified exact.VerifiedAuthorization) string
 const recordColumns = `id, network, permit2_address, payer, nonce::TEXT, digest, state,
 	transaction_id, signed_payload, created_at, updated_at, confirmed_block_number, confirmed_block_id, confirmed_at`
 
-// Get 只读取当前 Store 网络及 Permit2 域的记录，即使原授权已过期也可追踪原交易。
+// Get reads only records in this Store's network and Permit2 domain. The original transaction
+// can still be tracked even after the original authorization has expired.
 func (store *Store) Get(ctx context.Context, id string) (Record, error) {
 	if err := store.validateID(id); err != nil {
 		return Record{}, err
@@ -156,9 +169,12 @@ func (store *Store) Get(ctx context.Context, id string) (Record, error) {
 	`, id, store.network, store.permit2))
 }
 
-// SaveTransaction 原子保存唯一的签名结果，广播前必须成功调用并使用返回的持久化字节。
-// 相同结果可幂等重试；不同结果、不同摘要或其他授权已使用的 txid 均冲突。
-// 调用方必须验证 ID 对应 Payload、授权绑定及有效期；本函数不解释交易编码。
+// SaveTransaction atomically saves the single signed result. It must succeed before broadcasting,
+// and the caller must use the persisted bytes it returns. Retrying with the same result is
+// idempotent; a different result, a different digest or a txid already used by another
+// authorization conflicts. The caller must verify that the ID matches the Payload, the
+// authorization binding and the validity window; this function does not interpret the
+// transaction encoding.
 func (store *Store) SaveTransaction(ctx context.Context, id string, digest [32]byte, transaction Transaction) (Record, error) {
 	if err := store.validateID(id); err != nil {
 		return Record{}, err
@@ -189,10 +205,13 @@ func (store *Store) saveTransaction(ctx context.Context, db rowQuerier, id strin
 		RETURNING `+recordColumns, id, store.network, store.permit2, digest[:], transaction.ID, transaction.Payload))
 }
 
-// BeginBroadcast 是唯一的广播许可：先提交 unknown，再返回数据库中的原始签名结果。
-// 只有一次调用能成功。调用方只能在该调用成功后广播返回值，不能广播本地未保存的交易。
-// 数据库提交结果未知、进程退出或 RPC 超时都不得创建新交易；Get 后追踪原 txid。
-// 崩溃发生在真正广播之前也可能留下 unknown，宁可人工恢复，不冒重复付款风险。
+// BeginBroadcast is the only broadcast permission: it first commits the unknown state and then
+// returns the original signed result stored in the database. Only one call can succeed. The
+// caller may broadcast the returned value only after this call succeeds, and must never
+// broadcast a transaction that was not saved locally. An unknown database commit outcome, a
+// process exit or an RPC timeout must never lead to creating a new transaction; call Get and
+// track the original txid. A crash before the actual broadcast may also leave the unknown state;
+// manual recovery is preferred over risking a double payment.
 func (store *Store) BeginBroadcast(ctx context.Context, id string, digest [32]byte) (Record, error) {
 	if err := store.validateID(id); err != nil {
 		return Record{}, err
@@ -220,9 +239,12 @@ func (store *Store) BeginBroadcast(ctx context.Context, id string, digest [32]by
 	return record, err
 }
 
-// RecordAccepted 只记录节点已受理原 txid，不能据此交付资源或视为链上成功。
-// 拒绝、超时、查无交易均不能释放 nonce 或替换原交易；未确认时保留 unknown/pending。
-// 已成功原记录的匹配回调只返回原结果，不回退状态或改变首次确认时间。
+// RecordAccepted only records that a node accepted the original txid; it must not be used to
+// deliver the resource or treated as on-chain success. Rejection, timeout or a missing
+// transaction must never release the nonce or replace the original transaction; while
+// unconfirmed, the record stays unknown or pending. A matching callback on an already succeeded
+// record only returns the original result, without rolling back the state or changing the first
+// confirmation time.
 func (store *Store) RecordAccepted(ctx context.Context, id string, digest [32]byte, transactionID string) (Record, error) {
 	if err := store.validateID(id); err != nil {
 		return Record{}, err

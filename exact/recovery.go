@@ -12,11 +12,14 @@ import (
 	tron "github.com/eightyun/x402-tron-go"
 )
 
-// RestoreSettlement 从原签名交易恢复历史核验所需的不可变绑定，不重新构建或签名交易。
-// config 和 executorAddress 必须来自可信部署配置，而不是付款请求或节点响应。
-// 仅接受本包构建器的固定规范格式；历史过期不影响恢复，但恢复不证明原报价、
-// 预检或链上执行成功。调用方必须对照持久化授权标识，再调用 CheckSettlement。
-// 调用期间不得修改 transaction.Payload；恢复对象不引用输入切片。
+// RestoreSettlement restores, from the original signed transaction, the immutable bindings needed
+// for historical verification. It does not rebuild or re-sign the transaction. config and
+// executorAddress must come from trusted deployment configuration, not from a payment request or
+// node response. Only the fixed canonical format produced by this package's builder is accepted.
+// Historical expiry does not prevent restoration, but restoration does not prove the original
+// quote, preflight or on-chain execution succeeded. The caller must check the result against the
+// persisted authorization identifiers before calling CheckSettlement. transaction.Payload must not
+// be modified during the call; the restored object does not reference the input slice.
 func RestoreSettlement(config Config, executorAddress string, transaction SettlementTransaction) (*PreparedSettlement, error) {
 	verifier, err := NewOfflineVerifier(config)
 	executor, executorErr := configuredAddress(executorAddress)

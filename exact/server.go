@@ -10,20 +10,23 @@ import (
 )
 
 var (
-	ErrServerConfig       = errors.New("TRON 资源服务端配置无效")
-	ErrServerPrice        = errors.New("TRON 报价必须是配置资产的规范最小单位正整数")
-	ErrFacilitatorSupport = errors.New("facilitator 未声明匹配的 TRON exact Permit2 能力")
+	ErrServerConfig       = errors.New("exact: invalid resource server configuration")
+	ErrServerPrice        = errors.New("exact: price must be a canonical positive atomic amount of the configured asset")
+	ErrFacilitatorSupport = errors.New("exact: facilitator does not advertise matching TRON exact Permit2 support")
 )
 
-// ServerConfig 固定可信网络、单资产与收款人；不推断美元汇率或链上合约部署。
+// ServerConfig fixes the trusted network, a single asset and the recipient. It does not infer USD
+// exchange rates or on-chain contract deployments.
 type ServerConfig struct {
 	Network string
 	Asset   string
 	PayTo   string
 }
 
-// Server 实现官方资源服务端机制，使用 upfront 流程在结算成功后才运行 handler。
-// 它不持有私钥、访问数据库或自行证明到账；必须使用可信且核验最终结果的 facilitator。
+// Server implements the official resource server scheme and uses the upfront flow, so the handler
+// runs only after settlement succeeds. It holds no private keys, does not access databases and
+// does not prove payment by itself; a trusted facilitator that verifies the final result must be
+// used.
 type Server struct {
 	network string
 	asset   string
@@ -35,7 +38,8 @@ var (
 	_ x402.FacilitatorSupportValidator = (*Server)(nil)
 )
 
-// NewServer 校验并规范化部署方的固定报价策略，不从付款请求获取配置。
+// NewServer validates and normalizes the deployer's fixed pricing policy. Configuration is never
+// taken from payment requests.
 func NewServer(config ServerConfig) (*Server, error) {
 	network, networkErr := tron.NormalizeNetwork(config.Network)
 	_, assetErr := configuredAddress(config.Asset)
@@ -48,7 +52,8 @@ func NewServer(config ServerConfig) (*Server, error) {
 	return &Server{network: network, asset: asset, payTo: payTo}, nil
 }
 
-// Network 返回官方 SDK 注册使用的规范 CAIP-2 网络标识。
+// Network returns the canonical CAIP-2 network identifier used for registration with the official
+// SDK.
 func (server *Server) Network() string {
 	if server == nil {
 		return ""
@@ -56,20 +61,23 @@ func (server *Server) Network() string {
 	return server.network
 }
 
-// Scheme 返回机制名称。
+// Scheme returns the scheme name.
 func (*Server) Scheme() string { return "exact" }
 
-// DefaultAssetTransferMethod 不默认为 TRON 代币并不普遍支持的 EIP-3009。
+// DefaultAssetTransferMethod returns permit2 rather than defaulting to EIP-3009, which TRON tokens
+// do not commonly support.
 func (*Server) DefaultAssetTransferMethod() string { return "permit2" }
 
-// PaymentFlows 只允许 handler 前结算；每次返回独立配置，调用方不能修改内部策略。
+// PaymentFlows allows only settlement before the handler runs. It returns a fresh configuration
+// on each call, so callers cannot modify the internal policy.
 func (*Server) PaymentFlows() map[string]x402.PaymentFlowConfig {
 	return map[string]x402.PaymentFlowConfig{"permit2": {
 		Supported: []x402.PaymentFlowName{x402.PaymentFlowUpfront}, Default: x402.PaymentFlowUpfront,
 	}}
 }
 
-// ParsePrice 接受最小单位字符串、官方 AssetAmount 或同结构的严格 map，不接受浮点/美元价格。
+// ParsePrice accepts an atomic-unit string, an official AssetAmount, or a strict map with the same
+// structure. Floating-point and USD prices are rejected.
 func (server *Server) ParsePrice(price x402.Price, network x402.Network) (x402.AssetAmount, error) {
 	if server == nil || server.network == "" {
 		return x402.AssetAmount{}, ErrServerConfig
@@ -118,8 +126,10 @@ func (server *Server) ParsePrice(price x402.Price, network x402.Network) (x402.A
 	return x402.AssetAmount{Asset: server.asset, Amount: parsed.Amount, Extra: upfrontExtra()}, nil
 }
 
-// ValidateFacilitatorSupport 要求 v2/exact/同网络，并明确声明支持 Permit2；不复制其其他元数据。
-// supportedAssetTransferMethods 采用已有 TRON 生态能力字段，声明本身不是合约或到账证明。
+// ValidateFacilitatorSupport requires x402 v2, the exact scheme, the same network and an explicit
+// declaration of Permit2 support; other metadata is not copied. It uses the existing TRON
+// ecosystem capability field supportedAssetTransferMethods; the declaration itself is not proof
+// of contracts or of payment.
 func (server *Server) ValidateFacilitatorSupport(network x402.Network, kind types.SupportedKind, _ []string) error {
 	if server == nil || server.network == "" {
 		return ErrServerConfig
@@ -148,7 +158,8 @@ func (server *Server) ValidateFacilitatorSupport(network x402.Network, kind type
 	return nil
 }
 
-// EnhancePaymentRequirements 固定报价身份及 upfront；扩展能力清单仅用于发现，不混入支付 extra。
+// EnhancePaymentRequirements pins the quote identity and the upfront flow. The extensions list is
+// used only for discovery and is not merged into the payment extra.
 func (server *Server) EnhancePaymentRequirements(ctx context.Context, requirements types.PaymentRequirements, kind types.SupportedKind, extensions []string) (types.PaymentRequirements, error) {
 	if err := ctx.Err(); err != nil {
 		return types.PaymentRequirements{}, err

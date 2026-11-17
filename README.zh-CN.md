@@ -10,7 +10,7 @@
 **为 [x402](https://x402.org) 提供 TRON 支持的 Go SDK。** x402-tron-go 把 TRON 网络接入官方 [x402 Go SDK](https://github.com/x402-foundation/x402/tree/main/go)，让客户端、API 服务端和 facilitator 无需自行实现 TRON 协议细节，即可通过 HTTP 402 收付 TRC-20 代币。
 
 > [!WARNING]
-> **测试网候选版本。** 本项目未经独立安全审计，请勿用于真实资金。本项目不隶属于 x402 Foundation 或 TRON。
+> 本项目未经独立安全审计，也尚未在主网完成实付。请自行核验所有合约和节点，并从小额开始。本项目不隶属于 x402 Foundation 或 TRON。
 
 ## 特性
 
@@ -25,27 +25,27 @@
 
 | 角色 | 包 | 状态 |
 | --- | --- | --- |
-| 客户端 / Agent | `exact` | 可用于测试网 |
-| 资源服务端 | `exact` | 可用于测试网，需要可信的 facilitator |
-| Facilitator | `exact/postgres` | 可用于测试网，已验证 Nile 实付与崩溃恢复 |
+| 客户端 / Agent | `exact` | API 稳定；已验证 Nile 实付 |
+| 资源服务端 | `exact` | API 稳定；需要可信的 facilitator |
+| Facilitator | `exact/postgres` | API 稳定；已验证 Nile 实付与崩溃恢复 |
 
 | 网络 | CAIP-2 标识 | 状态 |
 | --- | --- | --- |
 | Nile 测试网 | `tron:3448148188` | 已验证实付 |
 | Shasta 测试网 | `tron:2494104990` | 仅离线测试 |
-| 主网 | `tron:728126428` | 未验证，示例程序会拒绝 |
+| 主网 | `tron:728126428` | 合约已逐字节核实，尚未实付。SDK 支持主网，示例程序会拒绝 |
 
-当前版本为 `v0.1.0-rc.*`，在 `v0.1.0` 之前公共 API 仍可能调整。
+当前版本为 `v0.1.0`。作为 `v0` 模块，后续小版本仍可能包含破坏性变更，届时会在发布说明中列出。
 
 ## 安装
 
 需要 **Go 1.26.10 或更高版本**，这是官方 x402 Go SDK 的最低要求。建议使用最新的 Go 1.26 补丁版，以获得标准库的安全修复。
 
 ```bash
-go get github.com/eightyun/x402-tron-go/exact@v0.1.0-rc.3
+go get github.com/eightyun/x402-tron-go/exact@v0.1.0
 
 # 仅自建持久化 facilitator 时需要
-go get github.com/eightyun/x402-tron-go/exact/postgres@v0.1.0-rc.3
+go get github.com/eightyun/x402-tron-go/exact/postgres@v0.1.0
 ```
 
 | 包 | 用途 | 依赖 |
@@ -56,7 +56,7 @@ go get github.com/eightyun/x402-tron-go/exact/postgres@v0.1.0-rc.3
 
 ## 快速上手
 
-以下合约地址均为 Nile 示例。在生产环境中，**每个部署地址和运行时代码哈希都必须自行独立核验**；SDK 不会从节点或付款请求中获取这些值。
+以下合约地址均为 Nile 示例。已核实的 Nile 和主网地址、代码哈希与创世区块 ID 见[测试与验证](guide/validation.zh-CN.md#已复现的主网合约构建)。在生产环境中，**每个部署地址和运行时代码哈希都必须自行独立核验**；SDK 不会从节点或付款请求中获取这些值。
 
 ### 客户端
 

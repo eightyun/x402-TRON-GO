@@ -14,20 +14,21 @@ import (
 )
 
 var (
-	ErrPreflightConfig       = errors.New("链上预检配置无效")
-	ErrNodeRead              = errors.New("链上只读 RPC 失败或返回无效数据")
-	ErrChainMismatch         = errors.New("节点链 ID 与可信网络配置不符")
-	ErrChainChanged          = errors.New("预检期间链头发生变化")
-	ErrStaleHead             = errors.New("节点链头时间超出允许范围")
-	ErrContractMismatch      = errors.New("合约代码或 Permit2 绑定不符")
-	ErrInsufficientBalance   = errors.New("付款人代币余额不足")
-	ErrInsufficientAllowance = errors.New("付款人 Permit2 授权额度不足")
-	ErrNonceUsed             = errors.New("付款授权 nonce 已被链上使用")
-	ErrSettlementSimulation  = errors.New("结算只读调用模拟失败或返回无效数据")
+	ErrPreflightConfig       = errors.New("exact: invalid preflight configuration")
+	ErrNodeRead              = errors.New("exact: read-only RPC failed or returned invalid data")
+	ErrChainMismatch         = errors.New("exact: node chain ID does not match the trusted network")
+	ErrChainChanged          = errors.New("exact: chain head changed during preflight")
+	ErrStaleHead             = errors.New("exact: node chain head timestamp is outside the allowed range")
+	ErrContractMismatch      = errors.New("exact: contract code or Permit2 binding mismatch")
+	ErrInsufficientBalance   = errors.New("exact: insufficient payer token balance")
+	ErrInsufficientAllowance = errors.New("exact: insufficient payer Permit2 allowance")
+	ErrNonceUsed             = errors.New("exact: payment authorization nonce already used on chain")
+	ErrSettlementSimulation  = errors.New("exact: settlement simulation failed or returned invalid data")
 )
 
-// PreflightConfig 是部署方提供的只读节点与可信合约配置，不可来自付款请求。
-// 两项 CodeHash 必须是独立核验的 runtime bytecode Keccak-256，采用 0x + 32 字节格式。
+// PreflightConfig is the deployer-provided read-only node and trusted contract configuration. It
+// must not come from a payment request. Both CodeHash fields must be independently verified
+// Keccak-256 hashes of the runtime bytecode, formatted as 0x followed by 32 bytes.
 type PreflightConfig struct {
 	Authorization          Config
 	NodeURL                string
@@ -37,11 +38,13 @@ type PreflightConfig struct {
 	Timeout                time.Duration
 	HTTPClient             *http.Client `json:"-"`
 	AllowInsecureLocalHTTP bool
-	// BatchRPC 显式合并独立只读检查；节点必须支持 JSON-RPC batch，不自动降级。
+	// BatchRPC explicitly combines independent read-only checks. The node must support JSON-RPC
+	// batch requests; there is no automatic fallback.
 	BatchRPC bool
 }
 
-// PreflightResult 仅记录本轮只读观察，不是最终性、扣款或结算证明。
+// PreflightResult only records the read-only observations of this round. It is not proof of
+// finality, debit or settlement.
 type PreflightResult struct {
 	Authorization  VerifiedAuthorization
 	BlockNumber    uint64
@@ -49,8 +52,9 @@ type PreflightResult struct {
 	BlockTimestamp time.Time
 }
 
-// PreflightVerifier 组合离线验签和链上状态预检，不持有密钥、消费 nonce 或广播交易。
-// 可并发使用；调用期间不可修改传入的 payload/requirements。
+// PreflightVerifier combines offline signature verification with on-chain state preflight checks.
+// It does not hold keys, consume nonces or broadcast transactions. It is safe for concurrent use;
+// the payload and requirements passed in must not be modified during a call.
 type PreflightVerifier struct {
 	offline         *OfflineVerifier
 	rpc             *readRPC
@@ -61,7 +65,8 @@ type PreflightVerifier struct {
 	timeout         time.Duration
 }
 
-// NewPreflightVerifier 固定可信配置，不自动学习节点返回的合约代码哈希。
+// NewPreflightVerifier pins the trusted configuration and never learns contract code hashes from
+// node responses.
 func NewPreflightVerifier(config PreflightConfig) (*PreflightVerifier, error) {
 	offline, offlineErr := NewOfflineVerifier(config.Authorization)
 	chainID, chainErr := tron.ChainID(config.Authorization.Network)
@@ -87,16 +92,20 @@ func NewPreflightVerifier(config PreflightConfig) (*PreflightVerifier, error) {
 	}, nil
 }
 
-// Check 在指定服务端时间下执行预检，RPC 用时会计入最后一次授权有效期检查。
-// TRON eth_call/getCode 使用 latest；前后链头一致只是漂移检查，不是原子快照。
-// 返回成功仍须在结算前重新检查，并进行持久化幂等、链上执行和结果核验。
+// Check runs the preflight at the given server time; time spent on RPC is included in the final
+// authorization validity check. TRON eth_call and eth_getCode use latest; matching chain heads
+// before and after are only a drift check, not an atomic snapshot. A successful result must still
+// be rechecked before settlement, followed by persistent idempotency, on-chain execution and
+// result verification.
 func (verifier *PreflightVerifier) Check(ctx context.Context, payload types.PaymentPayload, requirements types.PaymentRequirements, now time.Time) (PreflightResult, error) {
 	return verifier.check(ctx, payload, requirements, nil, now)
 }
 
-// CheckWithSimulation 在同轮预检中额外模拟固定代理的完整settle调用，不签名或广播。
-// executorAddress 必须是部署方固定的实际费用付款方，不能由付款请求指定；原Check仍只检查前置状态。
-// 模拟不预留资金/nonce、不证明账户权限或费用资源充分，也不代表最终到账。
+// CheckWithSimulation additionally simulates the full settle call on the pinned proxy within the
+// same preflight round. It does not sign or broadcast. executorAddress must be the actual fee payer
+// pinned by the deployer and must not be specified by the payment request; Check still only checks
+// preconditions. The simulation does not reserve funds or nonces, does not prove account
+// permissions or sufficient fee resources, and does not indicate final receipt of funds.
 func (verifier *PreflightVerifier) CheckWithSimulation(ctx context.Context, payload types.PaymentPayload, requirements types.PaymentRequirements, executorAddress string, now time.Time) (PreflightResult, error) {
 	executor, err := configuredAddress(executorAddress)
 	if err != nil {

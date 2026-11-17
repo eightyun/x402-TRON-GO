@@ -8,8 +8,10 @@ import (
 	tron "github.com/eightyun/x402-tron-go"
 )
 
-// DeploymentResult 仅表示本轮节点/部署检查，不能替代付款预检、固化到账或源码安全审计。
-// Asset 只检查地址和非空代码，不证明代币语义、精度或转账行为。
+// DeploymentResult only reflects the current round of node and deployment checks. It does not
+// replace payment preflight, solidified payment confirmation or a source code security audit.
+// Asset is only checked for its address and non-empty code; this does not prove token semantics,
+// decimals or transfer behavior.
 type DeploymentResult struct {
 	Network         string    `json:"network"`
 	Asset           string    `json:"asset"`
@@ -22,9 +24,12 @@ type DeploymentResult struct {
 	BlockTimestamp  time.Time `json:"blockTimestamp"`
 }
 
-// CheckDeployment 无需钱包或付款授权，检查可信配置中的链、合约代码、代理绑定和签名域。
-// 仍要求构造器中的代码哈希来自独立可信资料，不自动学习节点代码或补齐缺失配置。
-// 不检查余额/allowance/nonce/账户权限/资源，不模拟settle，不访问原生固化节点。
+// CheckDeployment checks the chain, contract code, proxy binding and signing domain from the
+// trusted configuration without requiring a wallet or payment authorization. The code hashes
+// passed to the constructor must still come from independent trusted sources; it never learns
+// code from the node or fills in missing configuration. It does not check balances, allowances,
+// nonces, account permissions or resources, does not simulate settle, and does not access the
+// native solidity node.
 func (verifier *PreflightVerifier) CheckDeployment(ctx context.Context, assetAddress string, now time.Time) (DeploymentResult, error) {
 	if verifier == nil || verifier.offline == nil || verifier.rpc == nil {
 		return DeploymentResult{}, ErrPreflightConfig

@@ -28,7 +28,7 @@ Mainnet and the testnets use the same address format. **You cannot tell the netw
 
 ### Usage
 
-Requires Go 1.26.10 or later. CI uses the latest 1.26.x patch release. Only testnet release candidates exist so far, and the public API may still change.
+Requires Go 1.26.10 or later. CI uses the latest 1.26.x patch release. As a `v0` module, minor releases may still contain breaking changes.
 
 ```go
 import tron "github.com/eightyun/x402-tron-go"

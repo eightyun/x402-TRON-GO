@@ -9,13 +9,15 @@ import (
 )
 
 var (
-	ErrNotSubmitted          = errors.New("原交易尚未进入广播阶段")
-	ErrSettlementUnconfirmed = errors.New("原交易尚未通过固化及精确到账核验")
+	ErrNotSubmitted          = errors.New("postgres: settlement has not been submitted for broadcast")
+	ErrSettlementUnconfirmed = errors.New("postgres: settlement not yet confirmed as solidified with the exact transfer")
 )
 
-// Submit 读取并验证已持久化交易，先原子提交 unknown，再只广播获得许可的原始字节。
-// 重复调用不能重播；所有不确定结果保留原 txid。调用方仍须完成链上预检/权限/费用风控。
-// now 是可信服务端时间，数据库耗时计入广播前的有效期检查。
+// Submit reads and validates the persisted transaction, atomically commits the unknown state, and
+// then broadcasts only the permitted original bytes. Repeated calls never rebroadcast; every
+// uncertain outcome keeps the original txid. The caller must still perform on-chain preflight,
+// permission and fee risk controls. now is the trusted server time; database latency counts
+// toward the validity check before broadcasting.
 func (store *Store) Submit(ctx context.Context, id string, prepared *exact.PreparedSettlement, client *exact.ExecutionClient, now time.Time) (Record, error) {
 	started := time.Now()
 	if err := store.validateID(id); err != nil {
@@ -60,8 +62,10 @@ func (store *Store) Submit(ctx context.Context, id string, prepared *exact.Prepa
 	return accepted, nil
 }
 
-// Track 重启后仅用日志中的原 txid 查找主体，不需重建过期授权或准备对象。
-// 该方法不修改日志，不广播，不把 Found 视为成功或固化，不因未找到而释放占用。
+// Track looks up the transaction after a restart using only the original txid from the journal,
+// without rebuilding the expired authorization or prepared object. It does not modify the
+// journal, does not broadcast, does not treat Found as success or solidification, and does not
+// release the reservation when the transaction is not found.
 func (store *Store) Track(ctx context.Context, id string, client *exact.ExecutionClient) (exact.TransactionObservation, error) {
 	record, err := store.submittedRecord(ctx, id, client)
 	if err != nil {
@@ -70,10 +74,13 @@ func (store *Store) Track(ctx context.Context, id string, client *exact.Executio
 	return client.Lookup(ctx, record.Transaction.ID)
 }
 
-// CheckSettlement 从持久化原交易恢复可信绑定，再只读核验原交易固化与精确到账。
-// executorAddress 来自可信部署配置；无须保留原准备对象或重新验证已过期报价。
-// 不改变日志状态、广播许可或占用；Confirmed 不是持久化成功终态。
-// 调用方须为整轮 SQL/解析/RPC 设置有界 context，now 来自可信服务端。
+// CheckSettlement restores the trusted binding from the persisted original transaction and then
+// verifies, read-only, that the original transaction is solidified and paid the exact amount.
+// executorAddress comes from trusted deployment configuration; the original prepared object need
+// not be kept and the expired quote is not revalidated. It does not change the journal state,
+// broadcast permission or reservation; Confirmed is not the persisted succeeded terminal state.
+// The caller must bound the whole SQL, decoding and RPC round with a context; now comes from a
+// trusted server.
 func (store *Store) CheckSettlement(ctx context.Context, id, executorAddress string, client *exact.ExecutionClient, now time.Time) (exact.SettlementObservation, error) {
 	started := time.Now()
 	record, err := store.submittedRecord(ctx, id, client)
@@ -88,10 +95,13 @@ func (store *Store) CheckSettlement(ctx context.Context, id, executorAddress str
 	return client.CheckSettlement(ctx, prepared, transaction, now.Add(time.Since(started)))
 }
 
-// ConfirmSettlement 只允许在内部完成原交易固化/精确到账核验后原子保存成功结果。
-// 已成功记录先本地验证原绑定，再幂等返回，不重新查询节点。它不授予资源请求交付许可。
-// 未确认/错误/提交结果未知均不能宣称成功或重播；数据库错误后必须 Get 复核。
-// RPC 不持有数据库锁，调用方应为 SQL/恢复/RPC/提交设置统一有界 context。
+// ConfirmSettlement atomically saves the succeeded result only after it internally verifies that
+// the original transaction is solidified and paid the exact amount. For an already succeeded
+// record it verifies the original binding locally and returns idempotently without querying the
+// node again. It does not grant permission to deliver the requested resource. An unconfirmed
+// result, an error or an unknown commit outcome must never be reported as success or lead to a
+// rebroadcast; after a database error, call Get to re-check. No database lock is held during
+// RPC; the caller should bound SQL, restoration, RPC and commit with a single context.
 func (store *Store) ConfirmSettlement(ctx context.Context, id, executorAddress string, client *exact.ExecutionClient, now time.Time) (Record, error) {
 	started := time.Now()
 	record, err := store.submittedRecord(ctx, id, client)

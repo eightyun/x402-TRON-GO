@@ -7,19 +7,21 @@ import (
 )
 
 const (
-	// NetworkMainnet 是 TRON 主网的规范 CAIP-2 标识，不代表已支持主网结算。
+	// NetworkMainnet is the canonical CAIP-2 identifier of TRON mainnet. Its presence does not
+	// mean mainnet settlement is supported.
 	NetworkMainnet = "tron:728126428"
-	// NetworkNile 是 TRON Nile 测试网的规范 CAIP-2 标识。
+	// NetworkNile is the canonical CAIP-2 identifier of the TRON Nile testnet.
 	NetworkNile = "tron:3448148188"
-	// NetworkShasta 是 TRON Shasta 测试网的规范 CAIP-2 标识。
+	// NetworkShasta is the canonical CAIP-2 identifier of the TRON Shasta testnet.
 	NetworkShasta = "tron:2494104990"
 )
 
-// ErrUnsupportedNetwork 表示网络不是已识别的 TRON 网络或历史别名。
-var ErrUnsupportedNetwork = errors.New("不支持的 TRON 网络")
+// ErrUnsupportedNetwork reports that the network is not a recognized TRON network or legacy
+// alias.
+var ErrUnsupportedNetwork = errors.New("tron: unsupported TRON network")
 
-// NormalizeNetwork 将已知网络或历史十六进制别名规范化为十进制 CAIP-2 标识。
-// 输入不接受首尾空白、通配符或未知网络。
+// NormalizeNetwork normalizes a known network or legacy hex alias to its decimal CAIP-2
+// identifier. Leading or trailing whitespace, wildcards and unknown networks are rejected.
 func NormalizeNetwork(network string) (string, error) {
 	chainID, err := ChainID(network)
 	if err != nil {
@@ -28,8 +30,9 @@ func NormalizeNetwork(network string) (string, error) {
 	return "tron:" + strconv.FormatUint(uint64(chainID), 10), nil
 }
 
-// ChainID 返回已知网络的链 ID，仅十六进制引用不区分大小写。
-// 网络标识用于隔离签名域，不能根据地址格式推断。
+// ChainID returns the chain ID of a known network. Only hex references are matched
+// case-insensitively. The network identifier isolates signing domains and must not be inferred
+// from the address format.
 func ChainID(network string) (uint32, error) {
 	if len(network) > len(NetworkNile) || !strings.HasPrefix(network, "tron:") {
 		return 0, ErrUnsupportedNetwork

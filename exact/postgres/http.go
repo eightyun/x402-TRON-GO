@@ -17,16 +17,20 @@ import (
 	"github.com/x402-foundation/x402/go/v2/types"
 )
 
-var ErrHTTPConfig = errors.New("facilitator HTTP 配置无效")
+var ErrHTTPConfig = errors.New("postgres: invalid facilitator HTTP configuration")
 
-// HTTPConfig 固定服务间令牌及每进程同时执行的预检/结算上限；不替代 TLS、累计费用预算和入口限流。
+// HTTPConfig pins the service-to-service token and the per-process limit on concurrent preflight
+// and settlement operations. It does not replace TLS, an aggregate fee budget or ingress rate
+// limiting.
 type HTTPConfig struct {
 	BearerToken   string `json:"-"`
 	MaxConcurrent int
 }
 
-// NewHTTPHandler 通过官方 core 暴露 /supported、/verify、/settle；不启动监听或访问节点/数据库。
-// 调用方须配置 HTTP 读写超时、TLS 入口；所有路径都要求 32~256 字节无空白 ASCII Bearer 令牌。
+// NewHTTPHandler exposes /supported, /verify and /settle through the official core. It does not
+// start a listener or contact nodes or the database. The caller must configure HTTP read/write
+// timeouts and TLS ingress. Every path requires a Bearer token of 32 to 256 bytes of
+// non-whitespace ASCII.
 func NewHTTPHandler(mechanism *Facilitator, config HTTPConfig) (http.Handler, error) {
 	if !mechanism.valid() || len(config.BearerToken) < 32 || len(config.BearerToken) > 256 {
 		return nil, ErrHTTPConfig

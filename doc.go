@@ -1,8 +1,15 @@
-// Package tron 提供可嵌入应用的 x402 TRON 网络标识和地址校验。
-// exact 子包实现官方 x402 SDK 的客户端、资源服务端机制及结算组件；
-// exact/postgres 提供需要自建 facilitator 时可选用的持久化实现。
-// 客户端和资源服务端不要求 PostgreSQL、独立示例服务或支付网关。
-// 导包不会加载钱包、启动服务器或访问节点。真实支付仍需显式配置可信部署、
-// 签名器、资产和限额，以及支持 TRON 的结算端。
-// 已有 Nile 测试网实付及原交易恢复验证，不代表主网或生产资金安全保证。
+// Package tron provides embeddable x402 TRON network identifiers and address validation.
+//
+// The exact subpackage implements the official x402 SDK client and resource server mechanisms
+// together with settlement components. The exact/postgres subpackage provides an optional
+// durable implementation for deployments that run their own facilitator. Clients and resource
+// servers do not require PostgreSQL, a standalone example service or a payment gateway.
+//
+// Importing these packages does not load wallets, start servers or contact nodes. Real payments
+// still require explicitly configured trusted deployments, signers, assets and limits, plus a
+// settlement side that supports TRON.
+//
+// Live payments and recovery of the original transaction have been validated on the Nile
+// testnet. This does not imply mainnet support or any guarantee of production fund safety, and
+// the code has not been audited.
 package tron

@@ -12,10 +12,11 @@ import (
 	"github.com/x402-foundation/x402/go/v2/types"
 )
 
-var ErrFacilitatorConfig = errors.New("TRON facilitator 配置无效")
+var ErrFacilitatorConfig = errors.New("postgres: invalid facilitator configuration")
 
-// FacilitatorConfig 是单网络、单资产/收款人的可信部署策略，不接受请求覆盖。
-// Signer 只签名，禁止自行广播，必须遵守 context；不提供密钥加载或默认合约部署。
+// FacilitatorConfig is the trusted deployment policy for a single network and a single
+// asset/recipient; requests cannot override it. Signer only signs, must never broadcast on its
+// own and must honor the context. No key loading or default contract deployment is provided.
 type FacilitatorConfig struct {
 	Preflight       exact.PreflightConfig
 	Execution       exact.ExecutionConfig
@@ -29,8 +30,10 @@ type FacilitatorConfig struct {
 	PollInterval    time.Duration
 }
 
-// Facilitator 实现官方 v2 exact/Permit2/upfront 机制，可并发/跨实例共享同一日志。
-// 本包不启动 HTTP、后台任务或自动授权；公开端点仍需鉴权/限流及累计费用预算。
+// Facilitator implements the official v2 exact/Permit2/upfront mechanism and may be used
+// concurrently and share the same journal across instances. This package does not start HTTP,
+// background jobs or automatic approvals; public endpoints still need authentication, rate
+// limiting and an aggregate fee budget.
 type Facilitator struct {
 	store     *Store
 	policy    *exact.Server
@@ -48,8 +51,9 @@ type Facilitator struct {
 
 var _ x402.SchemeNetworkFacilitator = (*Facilitator)(nil)
 
-// NewFacilitator 仅校验/固定配置，不连接节点、迁移数据库、调用签名器或广播。
-// Timeout 默认90秒，最多3分钟；PollInterval默认3秒，范围1~10秒。
+// NewFacilitator only validates and pins the configuration; it does not contact nodes, migrate
+// the database, call the signer or broadcast. Timeout defaults to 90 seconds with a maximum of
+// 3 minutes; PollInterval defaults to 3 seconds and must be between 1 and 10 seconds.
 func NewFacilitator(store *Store, config FacilitatorConfig) (*Facilitator, error) {
 	if !store.valid() || config.Signer == nil {
 		return nil, ErrFacilitatorConfig
@@ -92,7 +96,7 @@ func NewFacilitator(store *Store, config FacilitatorConfig) (*Facilitator, error
 func (*Facilitator) Scheme() string     { return "exact" }
 func (*Facilitator) CaipFamily() string { return "tron:*" }
 
-// Network 是官方 SDK 注册使用的规范网络标识。
+// Network returns the canonical network identifier used for registration with the official SDK.
 func (facilitator *Facilitator) Network() string {
 	if facilitator == nil || facilitator.store == nil {
 		return ""
@@ -114,7 +118,8 @@ func (facilitator *Facilitator) GetSigners(network x402.Network) []string {
 	return []string{facilitator.executor}
 }
 
-// Verify 是只读的新授权预检，不预留 nonce，不承诺之后结算必然成功。
+// Verify is a read-only preflight check of a new authorization. It does not reserve the nonce
+// and does not promise that a later settlement will succeed.
 func (facilitator *Facilitator) Verify(ctx context.Context, payload types.PaymentPayload, requirements types.PaymentRequirements, _ *x402.FacilitatorContext) (*x402.VerifyResponse, error) {
 	if !facilitator.valid() {
 		return nil, ErrFacilitatorConfig
@@ -131,8 +136,10 @@ func (facilitator *Facilitator) Verify(ctx context.Context, payload types.Paymen
 	return &x402.VerifyResponse{IsValid: true, Payer: result.Authorization.Payer}, nil
 }
 
-// Settle 独立完成验签/准入，不要求先 Verify；只在核验成功并已持久化后返回 success。
-// 调用期间不得修改请求。历史请求仅恢复同一交易，不重新检查已消费 nonce 或重签/重播。
+// Settle performs signature verification and admission on its own and does not require a prior
+// Verify; it returns success only after verification succeeds and the result is persisted. The
+// request must not be modified during the call. A previously seen request only recovers the
+// same transaction; it never re-checks the consumed nonce, re-signs or rebroadcasts.
 func (facilitator *Facilitator) Settle(ctx context.Context, payload types.PaymentPayload, requirements types.PaymentRequirements, _ *x402.FacilitatorContext) (*x402.SettleResponse, error) {
 	if !facilitator.valid() {
 		return nil, ErrFacilitatorConfig

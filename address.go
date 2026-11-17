@@ -10,11 +10,12 @@ import (
 
 const base58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
-// ErrInvalidAddress 表示输入不是有效的 TRON Base58Check 或 41 前缀地址。
-var ErrInvalidAddress = errors.New("TRON 地址无效")
+// ErrInvalidAddress reports that the input is not a valid TRON Base58Check or 41-prefixed
+// hex address.
+var ErrInvalidAddress = errors.New("tron: invalid TRON address")
 
-// NormalizeAddressHex 返回带 41 前缀的 42 位小写十六进制地址。
-// 接受 Base58Check 或 41 前缀十六进制，不接受空白及 0x 前缀输入。
+// NormalizeAddressHex returns the address as 42 lowercase hex characters with the 41 prefix.
+// It accepts Base58Check or 41-prefixed hex and rejects whitespace and 0x-prefixed input.
 func NormalizeAddressHex(value string) (string, error) {
 	address, err := decodeAddress(value)
 	if err != nil {
@@ -23,8 +24,9 @@ func NormalizeAddressHex(value string) (string, error) {
 	return hex.EncodeToString(address[:]), nil
 }
 
-// NormalizeAddressBase58 返回校验后的规范 Base58Check 地址。
-// 格式有效不代表账户已激活、地址安全或资产受支持，也不能用于区分网络。
+// NormalizeAddressBase58 returns the validated canonical Base58Check address.
+// A valid format does not mean the account is activated, the address is safe or the asset is
+// supported, and it cannot be used to distinguish networks.
 func NormalizeAddressBase58(value string) (string, error) {
 	address, err := decodeAddress(value)
 	if err != nil {
@@ -33,8 +35,9 @@ func NormalizeAddressBase58(value string) (string, error) {
 	return encodeAddress(address), nil
 }
 
-// AddressForSigning 将有效 TRON 地址显式转为 TIP-712 所需的 20 字节 0x 地址。
-// 本函数仅做格式转换，不验证任何签名或授权，不接受任意 EVM 地址作为输入。
+// AddressForSigning explicitly converts a valid TRON address into the 20-byte 0x address
+// required by TIP-712. It only converts the format: it does not verify any signature or
+// authorization, and it does not accept arbitrary EVM addresses as input.
 func AddressForSigning(value string) (string, error) {
 	address, err := decodeAddress(value)
 	if err != nil {

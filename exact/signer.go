@@ -11,17 +11,20 @@ import (
 	tron "github.com/eightyun/x402-tron-go"
 )
 
-var ErrEOASigner = errors.New("本地 EOA 签名器不可用或密钥无效")
+var ErrEOASigner = errors.New("exact: EOA signer unavailable or signing key invalid")
 
-// EOASigner 是可选的内存单 EOA 签名器，不加载文件/环境变量、不导出密钥。
-// 密钥驻留 Go 进程，不等价于 HSM/MPC；生产部署可用外部 AuthorizationSigner 替代。
+// EOASigner is an optional in-memory signer for a single EOA. It does not load keys from files
+// or environment variables and never exports the key. The key resides in the Go process, which
+// is not equivalent to an HSM or MPC; production deployments may use an external
+// AuthorizationSigner instead.
 type EOASigner struct {
 	mu      sync.RWMutex
 	key     *secp256k1.PrivateKey
 	address string
 }
 
-// NewEOASigner 复制严格 32 字节且在曲线阶内的私钥；调用方仍须管理原始输入生命周期。
+// NewEOASigner copies a private key that must be exactly 32 bytes and within the curve order.
+// Callers remain responsible for the lifetime of the original input.
 func NewEOASigner(privateKey []byte) (*EOASigner, error) {
 	var scalar secp256k1.ModNScalar
 	defer scalar.Zero()
@@ -34,7 +37,7 @@ func NewEOASigner(privateKey []byte) (*EOASigner, error) {
 	return &EOASigner{key: key, address: address}, nil
 }
 
-// Address 返回可配置给 Client 的 Base58Check 付款人地址。
+// Address returns the Base58Check payer address that can be configured for a Client.
 func (signer *EOASigner) Address() string {
 	if signer == nil {
 		return ""
@@ -42,13 +45,16 @@ func (signer *EOASigner) Address() string {
 	return signer.address
 }
 
-// SignAuthorization 签署已计算的 TIP-712 摘要，不加前缀、不再次哈希。
+// SignAuthorization signs an already computed TIP-712 digest without adding a prefix or hashing
+// it again.
 func (signer *EOASigner) SignAuthorization(ctx context.Context, digest [32]byte) ([]byte, error) {
 	return signer.signDigest(ctx, digest)
 }
 
-// SignTransaction 签署可信构建器计算的原生交易 SHA-256 摘要，不加前缀、不再次哈希。
-// 必须作为 SettlementBuilder/Facilitator 的签名器使用，不能向不可信调用方暴露任意摘要签名服务。
+// SignTransaction signs the native transaction SHA-256 digest computed by a trusted builder,
+// without adding a prefix or hashing it again. It must only be used as the signer of a
+// SettlementBuilder or Facilitator and must never be exposed to untrusted callers as an
+// arbitrary-digest signing service.
 func (signer *EOASigner) SignTransaction(ctx context.Context, digest [32]byte) ([]byte, error) {
 	return signer.signDigest(ctx, digest)
 }
@@ -78,7 +84,8 @@ func (signer *EOASigner) signDigest(ctx context.Context, digest [32]byte) ([]byt
 	return signature, nil
 }
 
-// Close 幂等停止签名并尽力清除内部标量；Go 运行时不提供内存完全擦除保证。
+// Close idempotently stops signing and makes a best effort to clear the internal scalar. The Go
+// runtime provides no guarantee that memory is fully erased.
 func (signer *EOASigner) Close() error {
 	if signer == nil {
 		return nil
@@ -92,8 +99,8 @@ func (signer *EOASigner) Close() error {
 	return nil
 }
 
-// String 避免常见格式化输出暴露内部标量。
+// String prevents common formatted output from exposing the internal scalar.
 func (*EOASigner) String() string { return "EOASigner(<redacted>)" }
 
-// GoString 避免 %#v 输出内部标量。
+// GoString prevents %#v from printing the internal scalar.
 func (*EOASigner) GoString() string { return "EOASigner(<redacted>)" }

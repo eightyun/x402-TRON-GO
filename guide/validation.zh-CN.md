@@ -6,7 +6,7 @@
 
 ## 运行测试
 
-测试需要 Go 1.26.10 或更高版本。CI 使用最新的 1.26.x 补丁版本。目前只有测试网候选版本，公开 API 仍可能变化。
+测试需要 Go 1.26.10 或更高版本。CI 使用最新的 1.26.x 补丁版本。作为 `v0` 模块，后续小版本仍可能包含破坏性变更。
 
 以下命令与 CI 使用的包列表一致：
 
@@ -52,7 +52,7 @@ PostgreSQL 集成测试需要设置 `X402_TEST_DATABASE_URL`。它必须指向�
 
 Linux CI 还会构建并启动三个可执行示例。它们使用随机 PostgreSQL schema 和自签名 TLS 证书的模拟节点。macOS 系统根证书不读取 `SSL_CERT_FILE`，因此该模拟节点子进程用例在 macOS 上明确跳过。这不会跳过 TLS 校验。
 
-测试网候选范围已完成。接入支付网关和发布版本是另行安排的步骤。这里的任何流程都不会自动操作主网。
+这里的任何流程都不会自动操作主网。
 
 ## HTTP 付款往返与原交易恢复
 
@@ -218,7 +218,7 @@ npm --prefix interop/bankofai test
 
 ### 验证范围
 
-以上实付完成了 v0.1 测试网候选范围内的 Nile 实付、中断恢复和打包三端接入。
+以上实付覆盖了 Nile 实付、中断恢复和打包三端接入。
 
 使用条件：
 
@@ -241,7 +241,7 @@ npm --prefix interop/bankofai test
 - 公共 RPC 仍可能因链头漂移拒绝新付款。
 - 私钥、原始授权和本机运维材料不公开。
 - 不提供可直接照搬的生产资金配置。
-- 候选包可自行构建。测试网候选版本 `v0.1.0-rc.3` 已作为 GitHub prerelease 发布。尚无稳定版本。
+- 发布包可自行构建。正式版本发布在 [GitHub Releases](https://github.com/eightyun/x402-tron-go/releases)。
 
 ## 已复现的 Nile 合约构建
 
@@ -276,6 +276,26 @@ npm --prefix interop/bankofai test
 - 代码复现本身不是主网配置、安全审计或付款证明。
 - 链头漂移仍可能拒绝一轮预检，不能跳过该检查。
 - 付款证据和未验证范围见 [Nile 实付记录](#nile-实付记录)。
+
+## 已复现的主网合约构建
+
+2026-11-12，使用与上文 Nile 相同的固定源码、编译器和设置，复现结果与主网部署**逐字节一致（含 metadata）**。immutable 按主网链 ID `728126428` 和主网 Permit2 地址链接。
+
+| 项目 | Permit2 | exact 代理 |
+| --- | --- | --- |
+| 地址 | `TTJxU3P8rHycAyFY4kVtGNfmnMH4ezcuM9` | `TN49yaJmZMZoEdDCqjB4uPzQLHvYkGw95m` |
+| 运行时字节数 | 9193 | 3593 |
+| 运行时 Keccak-256 | `0x2c3e0ea0e2ecd03b5e7414169777bed33041486fa09ca069f6a798ab7970bc46` | `0x711a5a33e1f80c0eeedc694af323d891cfb4aded96fc4b18e4d6f8faf43339cd` |
+
+同日核对的其他主网参考值：
+
+| 项目 | 值 | 核对方式 |
+| --- | --- | --- |
+| 创世区块 ID | `00000000000000001ebf88508a03865c71d452e25f4d51194196a1d22b6653dc` | TronGrid 与 TronStack 的 `/wallet` 和 `/walletsolidity` 返回一致；末 4 字节与链 ID `0x2b6653dc` 吻合 |
+| USDT | `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t` | `symbol()` 返回 `USDT`，`decimals()` 返回 `6` |
+
+> [!WARNING]
+> 本 SDK 尚未在主网完成实付。这些值是已核实的起点，不能替代你自己的核验。动用真实资金前请再次核对，并先做一笔小额主网付款。
 
 ## 构建测试网候选包
 

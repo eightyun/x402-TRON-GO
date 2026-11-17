@@ -6,7 +6,7 @@ This page explains how to run the test suites and what each suite covers. It als
 
 ## Running tests
 
-Tests require Go 1.26.10 or later. CI uses the latest 1.26.x patch release. Only a testnet release candidate exists, so public APIs may still change.
+Tests require Go 1.26.10 or later. CI uses the latest 1.26.x patch release. As a `v0` module, minor releases may still contain breaking changes.
 
 The commands below match the package list used in CI:
 
@@ -52,7 +52,7 @@ Automated receipts and blocks are synthetic fixtures. Live exercises are recorde
 
 Linux CI also builds and launches three executable examples. They use a random PostgreSQL schema and a synthetic node with a self-signed TLS certificate. macOS system roots do not read `SSL_CERT_FILE`, so this synthetic-process case skips explicitly on macOS. It does not bypass TLS.
 
-The testnet-candidate scope is complete. Gateway integration and version publication are separate steps. Nothing here operates on Mainnet automatically.
+Nothing here operates on Mainnet automatically.
 
 ## HTTP payment round trip and original-transaction recovery
 
@@ -218,7 +218,7 @@ All runs used Nile test USDT `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` and the source
 
 ### Scope
 
-These runs complete the v0.1 testnet-candidate scope for Nile payments, interruption recovery and packaged three-process integration.
+These runs cover Nile payments, interruption recovery and packaged three-process integration.
 
 What they used:
 
@@ -241,7 +241,7 @@ Other limits:
 - Public-RPC head drift can still reject new payments.
 - Private keys, original authorizations and local operational materials are not published.
 - No copy-ready configuration for production funds is supplied.
-- Candidate packages can be built locally. Testnet release candidate `v0.1.0-rc.3` is published as a GitHub prerelease. There is no stable release yet.
+- Packages can be built locally. Releases are published on [GitHub Releases](https://github.com/eightyun/x402-tron-go/releases).
 
 ## Reproduced Nile contract builds
 
@@ -276,6 +276,26 @@ Limits:
 - Code reproduction alone is not Mainnet configuration, a security audit or proof of payment.
 - Head drift can still reject a preflight round, and the check must not be bypassed.
 - For payment evidence and the unvalidated scope, see [Nile live payments](#nile-live-payments).
+
+## Reproduced Mainnet contract builds
+
+On 2026-11-12, the same pinned sources, compilers and settings as the Nile builds above reproduced the Mainnet deployments **byte for byte, including metadata**. Immutables were linked with the Mainnet chain ID `728126428` and the Mainnet Permit2 address.
+
+| Item | Permit2 | exact proxy |
+| --- | --- | --- |
+| Address | `TTJxU3P8rHycAyFY4kVtGNfmnMH4ezcuM9` | `TN49yaJmZMZoEdDCqjB4uPzQLHvYkGw95m` |
+| Runtime bytes | 9193 | 3593 |
+| Runtime Keccak-256 | `0x2c3e0ea0e2ecd03b5e7414169777bed33041486fa09ca069f6a798ab7970bc46` | `0x711a5a33e1f80c0eeedc694af323d891cfb4aded96fc4b18e4d6f8faf43339cd` |
+
+Other Mainnet reference values checked on the same day:
+
+| Item | Value | How it was checked |
+| --- | --- | --- |
+| Genesis block ID | `00000000000000001ebf88508a03865c71d452e25f4d51194196a1d22b6653dc` | Identical from TronGrid and TronStack, on both `/wallet` and `/walletsolidity`; the last four bytes match chain ID `0x2b6653dc` |
+| USDT | `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t` | `symbol()` returns `USDT`, `decimals()` returns `6` |
+
+> [!WARNING]
+> No Mainnet payment has been made with this SDK yet. These values are a verified starting point, not a substitute for your own verification. Check them again before moving real funds, and make a small Mainnet payment first.
 
 ## Building testnet candidate packages
 

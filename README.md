@@ -10,7 +10,7 @@ English | [简体中文](README.zh-CN.md)
 **TRON support for [x402](https://x402.org) in Go.** x402-tron-go plugs the TRON network into the official [x402 Go SDK](https://github.com/x402-foundation/x402/tree/main/go), so clients, API servers and facilitators can accept HTTP 402 payments in TRC-20 tokens without writing any TRON-specific protocol code.
 
 > [!WARNING]
-> **Testnet release candidate.** This project has not been independently audited. Do not use it with real funds. It is not affiliated with the x402 Foundation or TRON.
+> This project has not been independently audited, and no Mainnet payment has been made with it yet. Verify every contract and node yourself and start with small amounts. It is not affiliated with the x402 Foundation or TRON.
 
 ## Features
 
@@ -25,27 +25,27 @@ English | [简体中文](README.zh-CN.md)
 
 | Role | Package | Status |
 | --- | --- | --- |
-| Client / agent | `exact` | Ready for testnet |
-| Resource server | `exact` | Ready for testnet; requires a trusted facilitator |
-| Facilitator | `exact/postgres` | Ready for testnet; live Nile payments and crash recovery verified |
+| Client / agent | `exact` | Stable API; live Nile payments verified |
+| Resource server | `exact` | Stable API; requires a trusted facilitator |
+| Facilitator | `exact/postgres` | Stable API; live Nile payments and crash recovery verified |
 
 | Network | CAIP-2 ID | Status |
 | --- | --- | --- |
 | Nile testnet | `tron:3448148188` | Live payments verified |
 | Shasta testnet | `tron:2494104990` | Offline tests only |
-| Mainnet | `tron:728126428` | Not validated; the examples refuse it |
+| Mainnet | `tron:728126428` | Contracts verified byte for byte; no live payment yet. The SDK accepts it; the examples refuse it. |
 
-Releases are currently `v0.1.0-rc.*`. The public API may still change before `v0.1.0`.
+The current release is `v0.1.0`. As a `v0` module, minor releases may still contain breaking changes; they will be called out in the release notes.
 
 ## Installation
 
 Requires **Go 1.26.10 or later** (the minimum required by the official x402 Go SDK). Use the latest Go 1.26 patch release to get standard-library security fixes.
 
 ```bash
-go get github.com/eightyun/x402-tron-go/exact@v0.1.0-rc.3
+go get github.com/eightyun/x402-tron-go/exact@v0.1.0
 
 # Only needed if you run your own durable facilitator
-go get github.com/eightyun/x402-tron-go/exact/postgres@v0.1.0-rc.3
+go get github.com/eightyun/x402-tron-go/exact/postgres@v0.1.0
 ```
 
 | Package | Purpose | Dependencies |
@@ -56,7 +56,7 @@ go get github.com/eightyun/x402-tron-go/exact/postgres@v0.1.0-rc.3
 
 ## Quick start
 
-All contract addresses below are Nile examples. In production, **verify every deployment address and runtime code hash yourself**; the SDK never learns them from a node or from a payment request.
+All contract addresses below are Nile examples. Verified Nile and Mainnet addresses, code hashes and genesis block IDs are listed in [Testing and validation](guide/validation.md#reproduced-mainnet-contract-builds). In production, **verify every deployment address and runtime code hash yourself**; the SDK never learns them from a node or from a payment request.
 
 ### Client
 

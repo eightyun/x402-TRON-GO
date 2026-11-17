@@ -9,8 +9,8 @@ import (
 )
 
 var (
-	ErrLocalClientConfig   = errors.New("进程内 facilitator 客户端配置无效")
-	ErrLocalClientCapacity = errors.New("进程内 facilitator 并发容量已满")
+	ErrLocalClientConfig   = errors.New("postgres: invalid local facilitator client configuration")
+	ErrLocalClientCapacity = errors.New("postgres: local facilitator client at capacity")
 )
 
 type localClient struct {
@@ -22,9 +22,11 @@ type localClient struct {
 
 var _ x402.FacilitatorClient = (*localClient)(nil)
 
-// NewLocalClient 将现有机制接到官方资源服务端，无需HTTP服务、令牌或监听端口。
-// 构造只注册官方core，不访问节点/数据库或签名。maxConcurrent为0时取8，允许1~64。
-// 容量为每个client独立上限，不替代数据库幂等、应用鉴权或累计费用预算。
+// NewLocalClient connects an existing mechanism to the official resource server without an HTTP
+// service, token or listening port. Construction only registers the official core and does not
+// contact nodes or the database or sign anything. A maxConcurrent of 0 means 8; allowed values
+// are 1 to 64. The capacity is a separate limit per client and does not replace database
+// idempotency, application authentication or an aggregate fee budget.
 func NewLocalClient(mechanism *Facilitator, maxConcurrent int) (x402.FacilitatorClient, error) {
 	if maxConcurrent == 0 {
 		maxConcurrent = 8
